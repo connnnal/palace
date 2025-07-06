@@ -1,0 +1,3 @@
+[submodule "lib/odin_d2d_dwrite"]
+	path = lib/odin_d2d_dwrite
+	url = https://github.com/seventh-chord/odin_d2d_dwrite
