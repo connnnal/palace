@@ -5,6 +5,12 @@ import "core:log"
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
 
+
+// https://learn.microsoft.com/en-us/windows/win32/direct2d/improving-direct2d-performance.
+// https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/may/windows-with-c-introducing-direct2d-1-1#connecting-the-device-context-and-swap-chain.
+// https://raphlinus.github.io/personal/2018/04/08/smooth-resize.html.
+// https://learn.microsoft.com/en-us/windows/win32/direct2d/devices-and-device-contexts.
+
 CLASS_NAME :: APP_NAME + "Main"
 
 wind_state: struct {
@@ -61,17 +67,6 @@ wind_init :: proc "contextless" () {
 			this.paint_callback(this, this.area)
 
 			return 0
-		// case win.WM_SIZING:
-		// 	(this != nil) or_break
-		// 	(this.render_target != nil) or_break
-
-		// 	pad: win.RECT
-		// 	win.AdjustWindowRect(&pad, win.WS_OVERLAPPEDWINDOW, win.FALSE) or_break
-
-		// 	rect := transmute(^win.RECT)lparam
-		// 	c_rect := win.RECT{rect.left - pad.left, rect.top - pad.top, rect.right - pad.right, rect.bottom - pad.bottom}
-		// 	this.render_target->Resize(&{u32(c_rect.right - c_rect.left), u32(c_rect.bottom - c_rect.top)})
-		// 	return 0
 		case win.WM_DROPFILES:
 			// TODO: Accept files, dropped links.
 			drop := transmute(win.HDROP)wparam
@@ -165,19 +160,6 @@ wind_open :: proc(w: ^Window) -> (ok: bool) {
 }
 
 wind_pump :: proc(w: ^Window) -> (keep_alive: bool = true) {
-	// msg: win.MSG
-	// win.GetMessageW(&msg, nil, 0, 0)
-	// for {
-	// 	switch msg.message {
-	// 	case win.WM_QUIT:
-	// 		keep_alive = false
-	// 	case:
-	// 		win.TranslateMessage(&msg)
-	// 		win.DispatchMessageW(&msg)
-	// 	}
-
-	// 	win.PeekMessageW(&msg, nil, 0, 0, win.PM_REMOVE) or_break
-	// }
 	for {
 		msg: win.MSG
 		win.PeekMessageW(&msg, nil, 0, 0, win.PM_REMOVE) or_break
