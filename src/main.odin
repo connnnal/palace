@@ -45,17 +45,17 @@ main :: proc() {
 			b->Release()
 		}
 
-		{
+		when true {
 			root: ^Im_Node
-			if root = im_scope(id("root"), {size = {{1, 0}, LY_AUTO}, flow = .Col, color = .Background}); true {
-				if root := im_scope(id("header"), {size = {{1, 0}, {0, 64}}, flow = .Row, color = .Text}); true {
+			if root = im_scope(id("root"), {size = {1.0, nil}, flow = .Col, color = .Background}); true {
+				if root := im_scope(id("header"), {size = {1.0, 64}, flow = .Row, color = .Text}); true {
 
 				}
-				if root := im_scope(id("content"), {size = {LY_AUTO, LY_AUTO}, flow = .Col, gap = 8, padding = {32, 32}, color = .Foreground}); true {
+				if root := im_scope(id("content"), {flow = .Col, gap = 8, padding = {32, 32}, color = .Foreground}); true {
 					for i in 0 ..< 4 {
-						im_leaf(id("child", i), {size = {{0, 32}, {0, 32}}, color = .Content})
+						im_leaf(id("child", i), {size = {32, 32}, color = .Content})
 					}
-					im_leaf(id("foo"), {size = {{1, 0}, {1, 0}}, color = .Content})
+					im_leaf(id("foo"), {size = {0.3, 100}, color = .Content})
 				}
 			}
 			im_recurse(root, area)

@@ -29,10 +29,10 @@ import "core:testing"
 test_percentage_width_height :: proc(t: ^testing.T) {
 	root := new(Ly_Node, context.temp_allocator)
 	root.style.flow = .Row
-	root.style.size = {{0, 200}, {0, 200}}
+	root.style.size = {200, 200}
 
 	root_child0 := new(Ly_Node, context.temp_allocator)
-	root_child0.style.size = {{0.3, 0}, {0.3, 0}}
+	root_child0.style.size = {0.3, 0.3}
 	ly_node_insert(root, root_child0)
 
 	ly_compute_flexbox_layout(root, {0, 0})
@@ -52,21 +52,21 @@ test_percentage_width_height :: proc(t: ^testing.T) {
 test_auto_width :: proc(t: ^testing.T) {
 	root := new(Ly_Node, context.temp_allocator)
 	root.style.flow = .Row
-	root.style.size = {LY_AUTO, {0, 50}}
+	root.style.size = {nil, 50}
 
 	root_child0 := new(Ly_Node, context.temp_allocator)
-	root_child0.style.size = {{0, 50}, {0, 50}}
+	root_child0.style.size = {50, 50}
 	ly_node_insert(root, root_child0)
 
 	root_child1 := new(Ly_Node, context.temp_allocator)
-	root_child1.style.size = {{0, 50}, {0, 50}}
+	root_child1.style.size = {50, 50}
 	ly_node_insert(root, root_child1)
 
 	root_child2 := new(Ly_Node, context.temp_allocator)
-	root_child2.style.size = {{0, 50}, {0, 50}}
+	root_child2.style.size = {50, 50}
 	ly_node_insert(root, root_child2)
 
-	ly_compute_flexbox_layout(root, {0, 0})
+	ly_compute_flexbox_layout(root, {nil, nil})
 
 	testing.expect_value(t, root.measure.pos.x, 0)
 	testing.expect_value(t, root.measure.pos.y, 0)
@@ -93,21 +93,21 @@ test_auto_width :: proc(t: ^testing.T) {
 test_auto_height :: proc(t: ^testing.T) {
 	root := new(Ly_Node, context.temp_allocator)
 	root.style.flow = .Col
-	root.style.size = {{0, 50}, LY_AUTO}
+	root.style.size = {50, nil}
 
 	root_child0 := new(Ly_Node, context.temp_allocator)
-	root_child0.style.size = {{0, 50}, {0, 50}}
+	root_child0.style.size = {50, 50}
 	ly_node_insert(root, root_child0)
 
 	root_child1 := new(Ly_Node, context.temp_allocator)
-	root_child1.style.size = {{0, 50}, {0, 50}}
+	root_child1.style.size = {50, 50}
 	ly_node_insert(root, root_child1)
 
 	root_child2 := new(Ly_Node, context.temp_allocator)
-	root_child2.style.size = {{0, 50}, {0, 50}}
+	root_child2.style.size = {50, 50}
 	ly_node_insert(root, root_child2)
 
-	ly_compute_flexbox_layout(root, {0, 0})
+	ly_compute_flexbox_layout(root, {nil, nil})
 
 	testing.expect_value(t, root.measure.pos.x, 0)
 	testing.expect_value(t, root.measure.pos.y, 0)

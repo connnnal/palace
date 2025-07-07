@@ -154,7 +154,7 @@ im_leaf :: proc(id: Id, style: Im_Props) -> ^Im_Node {
 }
 
 im_recurse :: proc(root: ^Im_Node, available: [2]i32) {
-	ly_compute_flexbox_layout(root, available)
+	ly_compute_flexbox_layout(root, {available.x, available.y})
 }
 
 im_dump :: proc(node: ^Im_Node, allocator := context.temp_allocator) -> string {
