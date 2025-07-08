@@ -64,7 +64,7 @@ wind_init :: proc "contextless" () {
 		case win.WM_PAINT:
 			(this != nil) or_break
 
-			this.paint_callback(this, this.area)
+			wind_paint(this)
 
 			return 0
 		case win.WM_DROPFILES:

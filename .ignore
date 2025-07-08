@@ -2,3 +2,5 @@
 *.lib
 *.pdb
 *.exp
+
+lib/odin_d2d_dwrite
