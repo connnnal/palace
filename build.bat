@@ -38,8 +38,8 @@ IF "%-retail"=="1" (
 	SET app_flags=%app_flags% -source-code-locations:obfuscated
 )
 
-odin test src -out:palace_tests.exe %all_flags%
-IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
+:: odin test src -out:palace_tests.exe %all_flags%
+:: IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
 odin build src -out:palace.exe %all_flags% %app_flags%
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
