@@ -21,13 +21,43 @@ Ly_Dim :: union {
 	f32, // Float, definite
 }
 
+// TODO: What does the spec call this datatype?
+Ly_Align :: enum {
+	FlexStart,
+	FlexEnd,
+	Center,
+	SpaceBetween,
+	SpaceAround,
+	Stretch,
+}
+
+// TODO: What does the spec call this datatype?
+Ly_Edge :: enum {
+	Auto,
+	FlexStart,
+	FlexEnd,
+	Center,
+	Baseline,
+	Stretch,
+}
+
+// Ly_Padding :: struct #raw_union {
+// 	px:    struct {
+// 		left, right, top, bottom: i32,
+// 	},
+// 	world: [Ly_Axis_World][2]i32,
+// 	array: [4]i32,
+// }
+
 Ly_Constants :: struct {
-	size:    [2]Ly_Dim,
-	margin:  [2]i32,
-	padding: [2]i32,
-	gap:     i32,
-	flow:    Ly_Axis_Flex,
-	text:    string,
+	size:          [2]Ly_Dim,
+	margin:        [4]i32,
+	padding:       [4]i32,
+	align_content: Ly_Align,
+	align_items:   Ly_Edge,
+	gap:           i32,
+	flow:          Ly_Axis_Flex,
+	text:          string,
 }
 
 Ly_Output :: struct {
@@ -60,7 +90,7 @@ ly_node_insert :: #force_inline proc(parent, child: ^Ly_Node) {
 	}
 }
 
-// "nil" means indetermined.
+// "nil" means indefinite.
 Ly_Length :: Maybe(i32)
 
 ly_measure_on :: proc(node: ^Ly_Node, available: [2]Ly_Length, axis: Ly_Axis_World) -> i32 {
@@ -127,7 +157,7 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 
 			child.measure.pos = node.measure.pos
 			child.measure.pos[int(mx)] += content + child_count * node.style.gap
-			child.measure.pos += padding
+			child.measure.pos += padding[int(mx) * 2]
 
 			ly_measure_on(child, available, Ly_Axis_World(mx))
 			content += child.measure.size[int(mx)]
@@ -136,7 +166,7 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 		gaps := node.style.gap * max(0, child_count - 1)
 		content += gaps
 
-		if node.style.size[int(mx)] == nil {
+		if available[int(mx)] == nil {
 			available[int(mx)] = content + padding[int(mx)] * 2
 		}
 	}
@@ -149,7 +179,7 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 			content = max(content, cross)
 		}
 
-		if node.style.size[int(cx)] == nil {
+		if available[int(cx)] == nil {
 			available[int(cx)] = content + padding[int(cx)] * 2
 		}
 	}

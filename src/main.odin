@@ -51,7 +51,7 @@ main :: proc() {
 				if root := im_scope(id("header"), {size = {1.0, 64}, flow = .Row, color = .Text}); true {
 
 				}
-				if root := im_scope(id("content"), {flow = .Col, gap = 8, padding = {32, 32}, color = .Foreground}); true {
+				if root := im_scope(id("content"), {flow = .Col, gap = 8, padding = {32, 32, 32, 32}, color = .Foreground}); true {
 					for i in 0 ..< 4 {
 						im_leaf(id("child", i), {size = {32, 32}, color = .Content})
 					}

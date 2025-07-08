@@ -129,3 +129,225 @@ test_auto_height :: proc(t: ^testing.T) {
 	testing.expect_value(t, root_child2.measure.size.x, 50)
 	testing.expect_value(t, root_child2.measure.size.y, 50)
 }
+
+@(test)
+test_flex_direction_column_no_height :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.flow = .Col
+	root.style.size = {100, nil}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {nil, 10}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {nil, 10}
+	ly_node_insert(root, root_child1)
+
+	root_child2 := new(Ly_Node, context.temp_allocator)
+	root_child2.style.size = {nil, 10}
+	ly_node_insert(root, root_child2)
+
+	ly_compute_flexbox_layout(root, {nil, nil})
+
+	testing.expect_value(t, root.measure.pos.x, 0)
+	testing.expect_value(t, root.measure.pos.y, 0)
+	testing.expect_value(t, root.measure.size.x, 100)
+	testing.expect_value(t, root.measure.size.y, 30)
+
+	testing.expect_value(t, root_child0.measure.pos.x, 0)
+	testing.expect_value(t, root_child0.measure.pos.y, 0)
+	testing.expect_value(t, root_child0.measure.size.x, 100)
+	testing.expect_value(t, root_child0.measure.size.y, 10)
+
+	testing.expect_value(t, root_child1.measure.pos.x, 0)
+	testing.expect_value(t, root_child1.measure.pos.y, 10)
+	testing.expect_value(t, root_child1.measure.size.x, 100)
+	testing.expect_value(t, root_child1.measure.size.y, 10)
+
+	testing.expect_value(t, root_child2.measure.pos.x, 0)
+	testing.expect_value(t, root_child2.measure.pos.y, 20)
+	testing.expect_value(t, root_child2.measure.size.x, 100)
+	testing.expect_value(t, root_child2.measure.size.y, 10)
+}
+
+@(test)
+test_flex_direction_column :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.flow = .Col
+	root.style.size = {100, 100}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {nil, 10}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {nil, 10}
+	ly_node_insert(root, root_child1)
+
+	root_child2 := new(Ly_Node, context.temp_allocator)
+	root_child2.style.size = {nil, 10}
+	ly_node_insert(root, root_child2)
+
+	ly_compute_flexbox_layout(root, {nil, nil})
+
+	testing.expect_value(t, root.measure.pos.x, 0)
+	testing.expect_value(t, root.measure.pos.y, 0)
+	testing.expect_value(t, root.measure.size.x, 100)
+	testing.expect_value(t, root.measure.size.y, 100)
+
+	testing.expect_value(t, root_child0.measure.pos.x, 0)
+	testing.expect_value(t, root_child0.measure.pos.y, 0)
+	testing.expect_value(t, root_child0.measure.size.x, 100)
+	testing.expect_value(t, root_child0.measure.size.y, 10)
+
+	testing.expect_value(t, root_child1.measure.pos.x, 0)
+	testing.expect_value(t, root_child1.measure.pos.y, 10)
+	testing.expect_value(t, root_child1.measure.size.x, 100)
+	testing.expect_value(t, root_child1.measure.size.y, 10)
+
+	testing.expect_value(t, root_child2.measure.pos.x, 0)
+	testing.expect_value(t, root_child2.measure.pos.y, 20)
+	testing.expect_value(t, root_child2.measure.size.x, 100)
+	testing.expect_value(t, root_child2.measure.size.y, 10)
+}
+
+@(test)
+test_flex_direction_row :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.flow = .Row
+	root.style.size = {100, 100}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {10, nil}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {10, nil}
+	ly_node_insert(root, root_child1)
+
+	root_child2 := new(Ly_Node, context.temp_allocator)
+	root_child2.style.size = {10, nil}
+	ly_node_insert(root, root_child2)
+
+	ly_compute_flexbox_layout(root, {nil, nil})
+
+	testing.expect_value(t, root.measure.pos.x, 0)
+	testing.expect_value(t, root.measure.pos.y, 0)
+	testing.expect_value(t, root.measure.size.x, 100)
+	testing.expect_value(t, root.measure.size.y, 100)
+
+	testing.expect_value(t, root_child0.measure.pos.x, 0)
+	testing.expect_value(t, root_child0.measure.pos.y, 0)
+	testing.expect_value(t, root_child0.measure.size.x, 10)
+	testing.expect_value(t, root_child0.measure.size.y, 100)
+
+	testing.expect_value(t, root_child1.measure.pos.x, 10)
+	testing.expect_value(t, root_child1.measure.pos.y, 0)
+	testing.expect_value(t, root_child1.measure.size.x, 10)
+	testing.expect_value(t, root_child1.measure.size.y, 100)
+
+	testing.expect_value(t, root_child2.measure.pos.x, 20)
+	testing.expect_value(t, root_child2.measure.pos.y, 0)
+	testing.expect_value(t, root_child2.measure.size.x, 10)
+	testing.expect_value(t, root_child2.measure.size.y, 100)
+}
+
+@(test)
+test_padding_no_size :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.flow = .Col
+	root.style.padding = {10, 10, 10, 10}
+
+	ly_compute_flexbox_layout(root, {nil, nil})
+
+	testing.expect_value(t, root.measure.pos.x, 0)
+	testing.expect_value(t, root.measure.pos.y, 0)
+	testing.expect_value(t, root.measure.size.x, 20)
+	testing.expect_value(t, root.measure.size.y, 20)
+}
+
+@(test)
+test_padding_container_match_child :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.flow = .Col
+	root.style.padding = {10, 10, 10, 10}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {10, 10}
+	ly_node_insert(root, root_child0)
+
+	ly_compute_flexbox_layout(root, {nil, nil})
+
+	testing.expect_value(t, root.measure.pos.x, 0)
+	testing.expect_value(t, root.measure.pos.y, 0)
+	testing.expect_value(t, root.measure.size.x, 30)
+	testing.expect_value(t, root.measure.size.y, 30)
+
+	testing.expect_value(t, root_child0.measure.pos.x, 10)
+	testing.expect_value(t, root_child0.measure.pos.y, 10)
+	testing.expect_value(t, root_child0.measure.size.x, 10)
+	testing.expect_value(t, root_child0.measure.size.y, 10)
+}
+
+// @(test)
+// test_android_news_feed :: proc(t: ^testing.T) {
+// 	root := new(Ly_Node, context.temp_allocator)
+// 	root.style.flow = .Col
+// 	root.style.size = {1080, nil}
+// 
+// 	root_child0 := new(Ly_Node, context.temp_allocator)
+// 	ly_node_insert(root, root_child0)
+// 
+// 	root_child0_child0 := new(Ly_Node, context.temp_allocator)
+// 	root_child0_child0.style.align_content = .Stretch
+// 	ly_node_insert(root_child0, root_child0_child0)
+// 
+// 	root_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
+// 	root_child0_child0_child0.style.align_content = .Stretch
+// 	ly_node_insert(root_child0_child0, root_child0_child0_child0)
+// 
+// 	root_child0_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
+// 	root_child0_child0_child0_child0.style.flow = .Row
+// 	root_child0_child0_child0_child0.style.align_content = .Stretch
+// 	root_child0_child0_child0_child0.style.align_items = .Start
+// 	root_child0_child0_child0_child0.style.margin = {36, 24}
+// 	ly_node_insert(root_child0_child0_child0, root_child0_child0_child0_child0)
+// 
+// 	root_child0_child0_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
+// 	root_child0_child0_child0_child0_child0.style.flow = .Row
+// 	root_child0_child0_child0_child0_child0.style.align_content = .Stretch
+// 	ly_node_insert(root_child0_child0_child0_child0, root_child0_child0_child0_child0_child0)
+// 
+// 	root_child0_child0_child0_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
+// 	root_child0_child0_child0_child0_child0_child0.style.align_content = .Stretch
+// 	root_child0_child0_child0_child0_child0_child0.style.size = {120, 120}
+// 	ly_node_insert(root_child0_child0_child0_child0_child0, root_child0_child0_child0_child0_child0_child0)
+// 
+// 	root_child0_child0_child0_child0_child1 := new(Ly_Node, context.temp_allocator)
+// 	root_child0_child0_child0_child0_child1.style.align_content = .Stretch
+// 	root_child0_child0_child0_child0_child1.style.size = {120, 120}
+// 	ly_node_insert(root_child0_child0_child0_child0, root_child0_child0_child0_child0_child1)
+// 
+// 	ly_compute_flexbox_layout(root, {nil, nil})
+// 
+// 	testing.expect_value(t, root.measure.pos.x, 0)
+// 	testing.expect_value(t, root.measure.pos.y, 0)
+// 	testing.expect_value(t, root.measure.size.x, 100)
+// 	testing.expect_value(t, root.measure.size.y, 100)
+// 
+// 	testing.expect_value(t, root_child0.measure.pos.x, 0)
+// 	testing.expect_value(t, root_child0.measure.pos.y, 0)
+// 	testing.expect_value(t, root_child0.measure.size.x, 10)
+// 	testing.expect_value(t, root_child0.measure.size.y, 100)
+// 
+// 	testing.expect_value(t, root_child1.measure.pos.x, 10)
+// 	testing.expect_value(t, root_child1.measure.pos.y, 0)
+// 	testing.expect_value(t, root_child1.measure.size.x, 10)
+// 	testing.expect_value(t, root_child1.measure.size.y, 100)
+// 
+// 	testing.expect_value(t, root_child2.measure.pos.x, 20)
+// 	testing.expect_value(t, root_child2.measure.pos.y, 0)
+// 	testing.expect_value(t, root_child2.measure.size.x, 10)
+// 	testing.expect_value(t, root_child2.measure.size.y, 100)
+// }
