@@ -1,9 +1,11 @@
 package main
 
 import "base:runtime"
+import "core:fmt"
 import "core:log"
 import "core:math"
 import "core:math/rand"
+import "core:text/match"
 import "core:time"
 
 import win "core:sys/windows"
@@ -53,9 +55,10 @@ main :: proc() {
 				}
 				if root := im_scope(id("content"), {flow = .Col, gap = 8, padding = {32, 32, 32, 32}, color = .Foreground}); true {
 					for i in 0 ..< 4 {
-						im_leaf(id("child", i), {size = {32, 32}, color = .Content})
+						im_leaf(id("child", i), {size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16, fmt.tprintf("hi!!! %v", i)}})
 					}
-					im_leaf(id("foo"), {size = {0.3, 100}, color = .Content})
+					im_leaf(id("foo"), {size = {0.3, 100}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "let's do some word wrapping! :^)"}})
+					im_leaf(id("foo3"), {size = {0.2, 0.2}, color = .Content, text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 				}
 			}
 			im_recurse(root, area)
@@ -67,12 +70,16 @@ main :: proc() {
 		}
 
 		w.render_target->BeginDraw()
+		w.render_target->SetTextAntialiasMode(.CLEARTYPE)
 
 		for v in w.im.draws {
-			w.render_target->FillRectangle(
-				&d2w.D2D_RECT_F{f32(v.measure.pos.x), f32(v.measure.pos.y), f32(v.measure.size.x + v.measure.pos.x), f32(v.measure.size.y + v.measure.pos.y)},
-				brushes[v.color],
-			)
+			rect := d2w.D2D_RECT_F{f32(v.measure.pos.x), f32(v.measure.pos.y), f32(v.measure.size.x + v.measure.pos.x), f32(v.measure.size.y + v.measure.pos.y)}
+			w.render_target->FillRectangle(&rect, brushes[v.color])
+
+			if v.text_layout != nil {
+				point := d2w.D2D_POINT_2F{f32(v.measure.pos.x), f32(v.measure.pos.y)}
+				w.render_target->DrawTextLayout(point, v.text_layout, brushes[.Text], d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
+			}
 		}
 
 		D2DERR_RECREATE_TARGET :: transmute(win.HRESULT)u32(0x8899000C)

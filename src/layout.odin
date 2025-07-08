@@ -1,7 +1,9 @@
 package main
 
+import "base:intrinsics"
 import "base:runtime"
 import "core:log"
+import "core:reflect"
 
 Ly_Axis_Flex :: enum {
 	Row,
@@ -41,23 +43,22 @@ Ly_Edge :: enum {
 	Stretch,
 }
 
-// Ly_Padding :: struct #raw_union {
-// 	px:    struct {
-// 		left, right, top, bottom: i32,
-// 	},
-// 	world: [Ly_Axis_World][2]i32,
-// 	array: [4]i32,
+Ly_Measure_Func :: #type proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]Ly_Length
+
+// Ly_Size :: union #no_nil {
+// 	[2]Ly_Dim,
+// 	Ly_Measure_Func,
 // }
 
 Ly_Constants :: struct {
 	size:          [2]Ly_Dim,
+	measure_func:  Ly_Measure_Func,
 	margin:        [4]i32,
 	padding:       [4]i32,
 	align_content: Ly_Align,
 	align_items:   Ly_Edge,
 	gap:           i32,
 	flow:          Ly_Axis_Flex,
-	text:          string,
 }
 
 Ly_Output :: struct {
@@ -139,11 +140,19 @@ ly_determine_available_space :: proc(style: Ly_Constants, available: [2]Ly_Lengt
 			out[1] = value - style.margin[1] * 2
 		}
 	}
+
 	return
 }
 
 // TODO: Imagine if we made this SIMD lol.
 ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]Ly_Length {
+	if node.style.measure_func != nil {
+		available := node.style.measure_func(node, available)
+		node.measure.size.x = available.x.? or_else 0
+		node.measure.size.y = available.y.? or_else 0
+		return available
+	}
+
 	available := ly_determine_available_space(node.style, available)
 	padding := node.style.padding
 

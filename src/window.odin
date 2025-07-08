@@ -187,4 +187,5 @@ wind_paint :: proc(w: ^Window) -> (updated: bool) {
 wind_close :: proc(w: ^Window) {
 	w.render_target->Release()
 	win.DestroyWindow(w.wnd)
+	im_state_destroy(&w.im)
 }

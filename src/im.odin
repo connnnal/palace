@@ -5,6 +5,7 @@ import sa "core:container/small_array"
 import "core:fmt"
 import "core:hash"
 import "core:log"
+import "core:os/os2"
 import "core:strings"
 
 import d2w "lib:odin_d2d_dwrite"
@@ -54,7 +55,7 @@ id :: proc {
 
 Frame :: u64
 
-Im_State :: struct {
+Im_State :: struct #no_copy {
 	allocator: runtime.Allocator,
 	stack:     sa.Small_Array(8, ^Im_Node),
 	cache:     map[Id]^Im_Node,
@@ -68,6 +69,11 @@ im_state_init :: proc(state: ^Im_State, allocator := context.allocator) {
 	state.draws.allocator = allocator
 }
 
+im_state_destroy :: proc(state: ^Im_State) {
+	delete(state.cache)
+	delete(state.draws)
+}
+
 Im_Decor :: struct {
 	color: Palette,
 }
@@ -78,6 +84,8 @@ Im_Node :: struct {
 	id:          Id,
 	frame:       Frame,
 	using decor: Im_Decor,
+	text:        Maybe(Text_Desc),
+	text_layout: ^d2w.IDWriteTextLayout,
 }
 
 // TODO: Faster to set global, then memcpy back? Not ptr?
@@ -98,6 +106,7 @@ im_frame_end :: proc(state: ^Im_State) {
 Im_Props :: struct {
 	using constants: Ly_Constants,
 	using decor:     Im_Decor,
+	text:            Maybe(Text_Desc),
 }
 
 @(deferred_out = im_scope_end)
@@ -130,6 +139,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 
 	node.decor = props.decor
 	node.style = props.constants
+	node.text = props.text
 
 	node.id = id
 	node.frame = im_state.frame
@@ -137,6 +147,30 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 	node.frame = im_state.frame
 	if has_parent {
 		ly_node_insert(parent, node)
+	}
+
+	if _, ok := props.text.?; ok {
+		text_measure :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]Ly_Length {
+			node := cast(^Im_Node)node
+			text := &node.text.? or_else log.panic("bad text measure latent")
+
+			layout, handle := text_cache_measure(
+				Text_Measure_Key {
+					available,
+					text.contents,
+					Text_Format_Key{typeface = text.typeface, font_weight = text.font_weight, font_style = text.font_style, size = text.size},
+				},
+			)
+
+			metrics: d2w.DWRITE_TEXT_METRICS
+			hr := layout->GetMetrics(&metrics)
+			check(hr, "failed to get text metrics")
+
+			node.text_layout = layout
+
+			return {i32(metrics.width), i32(metrics.height)}
+		}
+		node.style.measure_func = text_measure
 	}
 
 	log.ensure(sa.append(&im_state.stack, node), "node stack overflow")
