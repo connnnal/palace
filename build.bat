@@ -37,8 +37,14 @@ IF "%-window%"=="1" (
 IF "%-retail"=="1" (
 	SET app_flags=%app_flags% -source-code-locations:obfuscated
 )
+IF "%-no-crt%"=="1" (
+	SET app_flags=%app_flags% -no-crt
+)
 
-odin test src -out:palace_tests.exe %all_flags%
+:: Targets
+IF "%-test%"=="1" (
+	odin test src -out:palace_tests.exe %all_flags%
+)
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
 odin build src -out:palace.exe %all_flags% %app_flags%

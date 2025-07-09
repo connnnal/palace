@@ -23,7 +23,184 @@ package main
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+import "base:runtime"
+import "core:container/queue"
+import "core:math"
 import "core:testing"
+
+import "lib:yoga"
+
+@(private = "file", deferred_out = yoga.NodeFreeRecursive)
+yoga_tree :: proc(user: ^Ly_Node, loc := #caller_location) -> yoga.Node_Ref {
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
+	// We can pass a logger via YGConfig, but the output looks to be not useful.
+	// Mostly fatal asserts for missing params.
+	node := yoga.NodeNew()
+	yoga.NodeSetContext(node, user)
+
+	q: queue.Queue(yoga.Node_Ref)
+	queue.init(&q, allocator = context.temp_allocator)
+
+	parent := node
+	for {
+		index: uint
+		for user := (^Ly_Node)(yoga.NodeGetContext(parent)).first; user != nil; user = user.next {
+			defer index += 1
+
+			node := yoga.NodeNew()
+			yoga.NodeSetContext(node, user)
+			yoga.NodeInsertChild(parent, node, index)
+
+			queue.append(&q, node)
+		}
+		parent = queue.pop_front_safe(&q) or_break
+	}
+
+	return node
+}
+
+@(private = "file")
+yoga_style :: proc(node: yoga.Node_Ref, style: Ly_Constants) {
+	// Size.
+	{
+		// Width.
+		switch value in style.size.x {
+		case i32:
+			yoga.NodeStyleSetWidth(node, f32(value))
+		case f32:
+			yoga.NodeStyleSetWidthPercent(node, value * 100)
+		case nil:
+			yoga.NodeStyleSetWidthAuto(node)
+		}
+		// Height.
+		switch value in style.size.y {
+		case i32:
+			yoga.NodeStyleSetHeight(node, f32(value))
+		case f32:
+			yoga.NodeStyleSetHeightPercent(node, value * 100)
+		case nil:
+			yoga.NodeStyleSetHeightAuto(node)
+		}
+	}
+	// Padding.
+	for edge, i in ([?]yoga.Edge{.Left, .Right, .Top, .Bottom}) {
+		yoga.NodeStyleSetPadding(node, edge, f32(style.padding[i]))
+	}
+	// Gap.
+	yoga.NodeStyleSetGap(node, .All, f32(style.gap))
+	// Align.
+	{
+		align: yoga.Align
+		switch style.align_items {
+		case .Stretch:
+			align = .Stretch
+		case .FlexStart:
+			align = .FlexStart
+		case .FlexEnd:
+			align = .FlexEnd
+		case .Center:
+			align = .Center
+		case .Baseline:
+			align = .Baseline
+		}
+		yoga.NodeStyleSetAlignItems(node, align)
+	}
+	// Justify.
+	{
+		justify: yoga.Justify
+		switch style.justify_content {
+		case .FlexStart:
+			justify = .FlexStart
+		case .FlexEnd:
+			justify = .FlexEnd
+		case .Center:
+			justify = .Center
+		case .SpaceBetween:
+			justify = .SpaceBetween
+		case .SpaceAround:
+			justify = .SpaceAround
+		}
+		yoga.NodeStyleSetJustifyContent(node, justify)
+	}
+	// Dir.
+	{
+		dir: yoga.Flex_Direction
+		switch style.flow {
+		case .Row:
+			dir = .Row
+		case .Col:
+			dir = .Column
+		case .RowReverse:
+			dir = .RowReverse
+		case .ColReverse:
+			dir = .ColumnReverse
+		}
+		yoga.NodeStyleSetFlexDirection(node, dir)
+	}
+}
+
+@(private = "file")
+yoga_validate :: proc(t: ^testing.T, node: yoga.Node_Ref, available: [2]Ly_Length, loc := #caller_location) {
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
+	// Copy styles.
+	{
+		q: queue.Queue(yoga.Node_Ref)
+		queue.init(&q, allocator = context.temp_allocator)
+
+		node := node
+		for {
+			user := (^Ly_Node)(yoga.NodeGetContext(node))
+			yoga_style(node, user.style)
+
+			for i in 0 ..< yoga.NodeGetChildCount(node) {
+				queue.append(&q, yoga.NodeGetChild(node, i))
+			}
+			node = queue.pop_front_safe(&q) or_break
+		}
+	}
+
+	// Verify position.
+	{
+		conv :: proc(length: Ly_Length) -> f32 {
+			if value, ok := length.?; ok {
+				return f32(value)
+			} else {
+				// YGUndefined.
+				return math.nan_f32()
+			}
+		}
+
+		yoga.NodeCalculateLayout(node, conv(available.x), conv(available.y), .LTR)
+
+		Pack :: struct {
+			node:   yoga.Node_Ref,
+			offset: [2]f32,
+		}
+		q: queue.Queue(Pack)
+		queue.init(&q, allocator = context.temp_allocator)
+
+		node := node
+		offset: [2]f32
+		for {
+			user := cast(^Ly_Node)yoga.NodeGetContext(node)
+
+			pos := offset + {yoga.NodeLayoutGetLeft(node), yoga.NodeLayoutGetTop(node)}
+
+			testing.expect_value(t, f32(user.measure.size[0]), yoga.NodeLayoutGetWidth(node), loc)
+			testing.expect_value(t, f32(user.measure.size[1]), yoga.NodeLayoutGetHeight(node), loc)
+			testing.expect_value(t, f32(user.measure.pos[0]), pos[0], loc)
+			testing.expect_value(t, f32(user.measure.pos[1]), pos[1], loc)
+
+			for i in 0 ..< yoga.NodeGetChildCount(node) {
+				queue.append(&q, Pack{yoga.NodeGetChild(node, i), pos})
+			}
+
+			node, offset = expand_values(queue.pop_front_safe(&q) or_break)
+		}
+	}
+}
 
 @(test)
 test_percentage_width_height :: proc(t: ^testing.T) {
@@ -36,16 +213,7 @@ test_percentage_width_height :: proc(t: ^testing.T) {
 	ly_node_insert(root, root_child0)
 
 	ly_compute_flexbox_layout(root, {0, 0})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 200)
-	testing.expect_value(t, root.measure.size.y, 200)
-
-	testing.expect_value(t, root_child0.measure.pos.x, 0)
-	testing.expect_value(t, root_child0.measure.pos.y, 0)
-	testing.expect_value(t, root_child0.measure.size.x, 60)
-	testing.expect_value(t, root_child0.measure.size.y, 60)
+	yoga_validate(t, yoga_tree(root), {0, 0})
 }
 
 @(test)
@@ -67,26 +235,7 @@ test_auto_width :: proc(t: ^testing.T) {
 	ly_node_insert(root, root_child2)
 
 	ly_compute_flexbox_layout(root, {nil, nil})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 150)
-	testing.expect_value(t, root.measure.size.y, 50)
-
-	testing.expect_value(t, root_child0.measure.pos.x, 0)
-	testing.expect_value(t, root_child0.measure.pos.y, 0)
-	testing.expect_value(t, root_child0.measure.size.x, 50)
-	testing.expect_value(t, root_child0.measure.size.y, 50)
-
-	testing.expect_value(t, root_child1.measure.pos.x, 50)
-	testing.expect_value(t, root_child1.measure.pos.y, 0)
-	testing.expect_value(t, root_child1.measure.size.x, 50)
-	testing.expect_value(t, root_child1.measure.size.y, 50)
-
-	testing.expect_value(t, root_child2.measure.pos.x, 100)
-	testing.expect_value(t, root_child2.measure.pos.y, 0)
-	testing.expect_value(t, root_child2.measure.size.x, 50)
-	testing.expect_value(t, root_child2.measure.size.y, 50)
+	yoga_validate(t, yoga_tree(root), {nil, nil})
 }
 
 @(test)
@@ -108,26 +257,7 @@ test_auto_height :: proc(t: ^testing.T) {
 	ly_node_insert(root, root_child2)
 
 	ly_compute_flexbox_layout(root, {nil, nil})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 50)
-	testing.expect_value(t, root.measure.size.y, 150)
-
-	testing.expect_value(t, root_child0.measure.pos.x, 0)
-	testing.expect_value(t, root_child0.measure.pos.y, 0)
-	testing.expect_value(t, root_child0.measure.size.x, 50)
-	testing.expect_value(t, root_child0.measure.size.y, 50)
-
-	testing.expect_value(t, root_child1.measure.pos.x, 0)
-	testing.expect_value(t, root_child1.measure.pos.y, 50)
-	testing.expect_value(t, root_child1.measure.size.x, 50)
-	testing.expect_value(t, root_child1.measure.size.y, 50)
-
-	testing.expect_value(t, root_child2.measure.pos.x, 0)
-	testing.expect_value(t, root_child2.measure.pos.y, 100)
-	testing.expect_value(t, root_child2.measure.size.x, 50)
-	testing.expect_value(t, root_child2.measure.size.y, 50)
+	yoga_validate(t, yoga_tree(root), {nil, nil})
 }
 
 @(test)
@@ -149,26 +279,7 @@ test_flex_direction_column_no_height :: proc(t: ^testing.T) {
 	ly_node_insert(root, root_child2)
 
 	ly_compute_flexbox_layout(root, {nil, nil})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 100)
-	testing.expect_value(t, root.measure.size.y, 30)
-
-	testing.expect_value(t, root_child0.measure.pos.x, 0)
-	testing.expect_value(t, root_child0.measure.pos.y, 0)
-	testing.expect_value(t, root_child0.measure.size.x, 100)
-	testing.expect_value(t, root_child0.measure.size.y, 10)
-
-	testing.expect_value(t, root_child1.measure.pos.x, 0)
-	testing.expect_value(t, root_child1.measure.pos.y, 10)
-	testing.expect_value(t, root_child1.measure.size.x, 100)
-	testing.expect_value(t, root_child1.measure.size.y, 10)
-
-	testing.expect_value(t, root_child2.measure.pos.x, 0)
-	testing.expect_value(t, root_child2.measure.pos.y, 20)
-	testing.expect_value(t, root_child2.measure.size.x, 100)
-	testing.expect_value(t, root_child2.measure.size.y, 10)
+	yoga_validate(t, yoga_tree(root), {nil, nil})
 }
 
 @(test)
@@ -190,26 +301,7 @@ test_flex_direction_column :: proc(t: ^testing.T) {
 	ly_node_insert(root, root_child2)
 
 	ly_compute_flexbox_layout(root, {nil, nil})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 100)
-	testing.expect_value(t, root.measure.size.y, 100)
-
-	testing.expect_value(t, root_child0.measure.pos.x, 0)
-	testing.expect_value(t, root_child0.measure.pos.y, 0)
-	testing.expect_value(t, root_child0.measure.size.x, 100)
-	testing.expect_value(t, root_child0.measure.size.y, 10)
-
-	testing.expect_value(t, root_child1.measure.pos.x, 0)
-	testing.expect_value(t, root_child1.measure.pos.y, 10)
-	testing.expect_value(t, root_child1.measure.size.x, 100)
-	testing.expect_value(t, root_child1.measure.size.y, 10)
-
-	testing.expect_value(t, root_child2.measure.pos.x, 0)
-	testing.expect_value(t, root_child2.measure.pos.y, 20)
-	testing.expect_value(t, root_child2.measure.size.x, 100)
-	testing.expect_value(t, root_child2.measure.size.y, 10)
+	yoga_validate(t, yoga_tree(root), {nil, nil})
 }
 
 @(test)
@@ -231,26 +323,7 @@ test_flex_direction_row :: proc(t: ^testing.T) {
 	ly_node_insert(root, root_child2)
 
 	ly_compute_flexbox_layout(root, {nil, nil})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 100)
-	testing.expect_value(t, root.measure.size.y, 100)
-
-	testing.expect_value(t, root_child0.measure.pos.x, 0)
-	testing.expect_value(t, root_child0.measure.pos.y, 0)
-	testing.expect_value(t, root_child0.measure.size.x, 10)
-	testing.expect_value(t, root_child0.measure.size.y, 100)
-
-	testing.expect_value(t, root_child1.measure.pos.x, 10)
-	testing.expect_value(t, root_child1.measure.pos.y, 0)
-	testing.expect_value(t, root_child1.measure.size.x, 10)
-	testing.expect_value(t, root_child1.measure.size.y, 100)
-
-	testing.expect_value(t, root_child2.measure.pos.x, 20)
-	testing.expect_value(t, root_child2.measure.pos.y, 0)
-	testing.expect_value(t, root_child2.measure.size.x, 10)
-	testing.expect_value(t, root_child2.measure.size.y, 100)
+	yoga_validate(t, yoga_tree(root), {nil, nil})
 }
 
 @(test)
@@ -260,11 +333,7 @@ test_padding_no_size :: proc(t: ^testing.T) {
 	root.style.padding = {10, 10, 10, 10}
 
 	ly_compute_flexbox_layout(root, {nil, nil})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 20)
-	testing.expect_value(t, root.measure.size.y, 20)
+	yoga_validate(t, yoga_tree(root), {nil, nil})
 }
 
 @(test)
@@ -278,16 +347,7 @@ test_padding_container_match_child :: proc(t: ^testing.T) {
 	ly_node_insert(root, root_child0)
 
 	ly_compute_flexbox_layout(root, {nil, nil})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 30)
-	testing.expect_value(t, root.measure.size.y, 30)
-
-	testing.expect_value(t, root_child0.measure.pos.x, 10)
-	testing.expect_value(t, root_child0.measure.pos.y, 10)
-	testing.expect_value(t, root_child0.measure.size.x, 10)
-	testing.expect_value(t, root_child0.measure.size.y, 10)
+	yoga_validate(t, yoga_tree(root), {nil, nil})
 }
 
 // Custom (not from Yoga repo).
@@ -326,101 +386,25 @@ test_custom_navbar :: proc(t: ^testing.T) {
 	ly_node_insert(root_content, root_content_child3)
 
 	ly_compute_flexbox_layout(root, {1920, 1080})
-
-	testing.expect_value(t, root.measure.pos.x, 0)
-	testing.expect_value(t, root.measure.pos.y, 0)
-	testing.expect_value(t, root.measure.size.x, 1920)
-	testing.expect_value(t, root.measure.size.y, 1080)
-
-	testing.expect_value(t, root_nav.measure.pos.x, 0)
-	testing.expect_value(t, root_nav.measure.pos.y, 0)
-	testing.expect_value(t, root_nav.measure.size.x, 1920)
-	testing.expect_value(t, root_nav.measure.size.y, 64)
-
-	testing.expect_value(t, root_content.measure.pos.x, 0)
-	testing.expect_value(t, root_content.measure.pos.y, 64)
-	testing.expect_value(t, root_content.measure.size.x, 1920)
-	testing.expect_value(t, root_content.measure.size.y, 420)
-
-	testing.expect_value(t, root_content_child0.measure.pos.x, 32)
-	testing.expect_value(t, root_content_child0.measure.pos.y, 64 + 32)
-	testing.expect_value(t, root_content_child0.measure.size.x, 32)
-	testing.expect_value(t, root_content_child0.measure.size.y, 32)
-
-	testing.expect_value(t, root_content_child1.measure.pos.x, 32)
-	testing.expect_value(t, root_content_child1.measure.pos.y, 64 + 32 + 8 + 32)
-	testing.expect_value(t, root_content_child1.measure.size.x, 928)
-	testing.expect_value(t, root_content_child1.measure.size.y, 100)
-
-	testing.expect_value(t, root_content_child2.measure.pos.x, 32)
-	testing.expect_value(t, root_content_child2.measure.pos.y, 64 + 32 + 8 + 32 + 8 + 100)
-	testing.expect_value(t, root_content_child2.measure.size.x, 464)
-	testing.expect_value(t, root_content_child2.measure.size.y, 120)
-
-	testing.expect_value(t, root_content_child3.measure.pos.x, 32)
-	testing.expect_value(t, root_content_child3.measure.pos.y, 64 + 32 + 8 + 32 + 8 + 100 + 8 + 120)
-	testing.expect_value(t, root_content_child3.measure.size.x, 1856)
-	testing.expect_value(t, root_content_child3.measure.size.y, 80)
+	yoga_validate(t, yoga_tree(root), {1920, 1080})
 }
 
-// @(test)
-// test_android_news_feed :: proc(t: ^testing.T) {
-// 	root := new(Ly_Node, context.temp_allocator)
-// 	root.style.flow = .Col
-// 	root.style.size = {1080, nil}
-// 
-// 	root_child0 := new(Ly_Node, context.temp_allocator)
-// 	ly_node_insert(root, root_child0)
-// 
-// 	root_child0_child0 := new(Ly_Node, context.temp_allocator)
-// 	root_child0_child0.style.align_content = .Stretch
-// 	ly_node_insert(root_child0, root_child0_child0)
-// 
-// 	root_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
-// 	root_child0_child0_child0.style.align_content = .Stretch
-// 	ly_node_insert(root_child0_child0, root_child0_child0_child0)
-// 
-// 	root_child0_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
-// 	root_child0_child0_child0_child0.style.flow = .Row
-// 	root_child0_child0_child0_child0.style.align_content = .Stretch
-// 	root_child0_child0_child0_child0.style.align_items = .Start
-// 	root_child0_child0_child0_child0.style.margin = {36, 24}
-// 	ly_node_insert(root_child0_child0_child0, root_child0_child0_child0_child0)
-// 
-// 	root_child0_child0_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
-// 	root_child0_child0_child0_child0_child0.style.flow = .Row
-// 	root_child0_child0_child0_child0_child0.style.align_content = .Stretch
-// 	ly_node_insert(root_child0_child0_child0_child0, root_child0_child0_child0_child0_child0)
-// 
-// 	root_child0_child0_child0_child0_child0_child0 := new(Ly_Node, context.temp_allocator)
-// 	root_child0_child0_child0_child0_child0_child0.style.align_content = .Stretch
-// 	root_child0_child0_child0_child0_child0_child0.style.size = {120, 120}
-// 	ly_node_insert(root_child0_child0_child0_child0_child0, root_child0_child0_child0_child0_child0_child0)
-// 
-// 	root_child0_child0_child0_child0_child1 := new(Ly_Node, context.temp_allocator)
-// 	root_child0_child0_child0_child0_child1.style.align_content = .Stretch
-// 	root_child0_child0_child0_child0_child1.style.size = {120, 120}
-// 	ly_node_insert(root_child0_child0_child0_child0, root_child0_child0_child0_child0_child1)
-// 
-// 	ly_compute_flexbox_layout(root, {nil, nil})
-// 
-// 	testing.expect_value(t, root.measure.pos.x, 0)
-// 	testing.expect_value(t, root.measure.pos.y, 0)
-// 	testing.expect_value(t, root.measure.size.x, 100)
-// 	testing.expect_value(t, root.measure.size.y, 100)
-// 
-// 	testing.expect_value(t, root_child0.measure.pos.x, 0)
-// 	testing.expect_value(t, root_child0.measure.pos.y, 0)
-// 	testing.expect_value(t, root_child0.measure.size.x, 10)
-// 	testing.expect_value(t, root_child0.measure.size.y, 100)
-// 
-// 	testing.expect_value(t, root_child1.measure.pos.x, 10)
-// 	testing.expect_value(t, root_child1.measure.pos.y, 0)
-// 	testing.expect_value(t, root_child1.measure.size.x, 10)
-// 	testing.expect_value(t, root_child1.measure.size.y, 100)
-// 
-// 	testing.expect_value(t, root_child2.measure.pos.x, 20)
-// 	testing.expect_value(t, root_child2.measure.pos.y, 0)
-// 	testing.expect_value(t, root_child2.measure.size.x, 10)
-// 	testing.expect_value(t, root_child2.measure.size.y, 100)
-// }
+
+// Custom (not from Yoga repo).
+@(test)
+test_padding_edge :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.size = {0.5, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	for axis in 0 ..< 4 {
+		root.style.padding[axis] = 32
+		defer root.style.padding[axis] = 0
+
+		ly_compute_flexbox_layout(root, {1920, 1080})
+		yoga_validate(t, yoga_tree(root), {1920, 1080})
+	}
+}

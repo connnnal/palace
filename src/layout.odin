@@ -41,12 +41,10 @@ Ly_Align :: enum {
 	Baseline,
 }
 
-Ly_Measure_Func :: #type proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]Ly_Length
-
-// Ly_Size :: union #no_nil {
-// 	[2]Ly_Dim,
-// 	Ly_Measure_Func,
-// }
+// We could handle unknown lengths from our custom measure function,
+// but Yoga treats this as an error, so we probably should too.
+// It simplifies our logic a little bit.
+Ly_Measure_Func :: #type proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32
 
 Ly_Constants :: struct {
 	size:            [2]Ly_Dim,
@@ -195,18 +193,8 @@ ly_position_flexbox :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
 	if node.style.measure_func != nil {
 		// TODO: Kind of a hack to resume typical layout flow after measuring.
-		available := node.style.measure_func(node, available)
-
-		if value, ok := available.x.?; ok {
-			node.style.size.x = value
-		} else {
-			node.style.size.x = nil
-		}
-		if value, ok := available.y.?; ok {
-			node.style.size.y = value
-		} else {
-			node.style.size.y = nil
-		}
+		outer_size := node.style.measure_func(node, available)
+		node.style.size = {outer_size.x, outer_size.y}
 	}
 
 	available_inner := ly_available_inner(node.style, available)

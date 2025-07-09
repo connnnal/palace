@@ -150,7 +150,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 	}
 
 	if _, ok := props.text.?; ok {
-		text_measure :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]Ly_Length {
+		text_measure :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
 			node := cast(^Im_Node)node
 			text := &node.text.? or_else log.panic("bad text measure latent")
 
