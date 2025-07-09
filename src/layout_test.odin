@@ -1,6 +1,23 @@
 #+private
 package main
 
+import "core:bytes"
+import "core:fmt"
+import "core:hash"
+import "core:image"
+import "core:image/png"
+import "core:image/tga"
+import "core:log"
+import "core:math/linalg"
+import "core:mem"
+import "core:os/os2"
+import "core:slice"
+import "core:sync"
+import win "core:sys/windows"
+import d2w "lib:odin_d2d_dwrite"
+import d3d11 "vendor:directx/d3d11"
+import dxgi "vendor:directx/dxgi"
+
 // MIT License
 // 
 // Copyright (c) Facebook, Inc. and its affiliates.
@@ -29,6 +46,169 @@ import "core:math"
 import "core:testing"
 
 import "lib:yoga"
+
+@(private = "file")
+yoga_draw :: proc(node: yoga.Node_Ref, loc := #caller_location) {
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
+	hr: win.HRESULT
+
+	width := cast(u32)yoga.NodeLayoutGetWidth(node)
+	height := cast(u32)yoga.NodeLayoutGetHeight(node)
+
+	factory: ^d2w.ID2D1Factory5
+	hr = d2w.D2D1CreateFactory(.SINGLE_THREADED, d2w.ID2D1Factory5_UUID, &{.INFORMATION}, (^rawptr)(&factory))
+	check(hr, "failed to create d2d factory")
+	defer factory->Release()
+
+	device: ^d3d11.IDevice
+	device_ctx: ^d3d11.IDeviceContext
+	hr = d3d11.CreateDevice(nil, .HARDWARE, nil, {.BGRA_SUPPORT, .DEBUG}, nil, 0, d3d11.SDK_VERSION, &device, nil, &device_ctx)
+	check(hr, "failed to create d3d11 device")
+	defer device->Release()
+	defer device_ctx->Release()
+
+	TEX_FORMAT :: dxgi.FORMAT.B8G8R8A8_UNORM
+	tex_rt: ^d3d11.ITexture2D
+	{
+		desc := d3d11.TEXTURE2D_DESC {
+			Width          = width,
+			Height         = height,
+			MipLevels      = 1,
+			ArraySize      = 1,
+			Format         = TEX_FORMAT,
+			SampleDesc     = {1, 0},
+			Usage          = .DEFAULT,
+			BindFlags      = {.RENDER_TARGET},
+			CPUAccessFlags = {},
+			MiscFlags      = {},
+		}
+		hr = device->CreateTexture2D(&desc, nil, &tex_rt)
+		check(hr, "failed to create rt texture")
+	}
+	defer tex_rt->Release()
+	tex_rb: ^d3d11.ITexture2D
+	{
+		desc := d3d11.TEXTURE2D_DESC {
+			Width          = width,
+			Height         = height,
+			MipLevels      = 1,
+			ArraySize      = 1,
+			Format         = TEX_FORMAT,
+			SampleDesc     = {1, 0},
+			Usage          = .STAGING,
+			BindFlags      = {},
+			CPUAccessFlags = {.READ},
+			MiscFlags      = {},
+		}
+		hr = device->CreateTexture2D(&desc, nil, &tex_rb)
+		check(hr, "failed to create rb texture")
+	}
+	defer tex_rb->Release()
+
+	surface: ^dxgi.ISurface
+	hr = tex_rt->QueryInterface(dxgi.ISurface_UUID, (^rawptr)(&surface))
+	check(hr, "failed to query dxgi surface")
+	defer surface->Release()
+
+	render_target: ^d2w.ID2D1RenderTarget
+	hr = factory->CreateDxgiSurfaceRenderTarget(surface, &{pixelFormat = {TEX_FORMAT, .PREMULTIPLIED}}, &render_target)
+	check(hr, "failed to create d2d/dxgi render target")
+	defer render_target->Release()
+
+	render_target->BeginDraw()
+	{
+		IDENTITY := transmute(d2w.D2D_MATRIX_3X2_F)[6]f32{1, 0, 0, 1, 0, 0}
+
+		brush: ^d2w.ID2D1SolidColorBrush
+		hr = render_target->CreateSolidColorBrush(&{}, &{1.0, IDENTITY}, &brush)
+		check(hr, "failed to create brush")
+		defer brush->Release()
+
+		stroke: ^d2w.ID2D1StrokeStyle1
+		hr = factory->CreateStrokeStyle1(&{.FLAT, .FLAT, .ROUND, .MITER, 10, .DASH_DOT, 0, .HAIRLINE}, nil, 0, &stroke)
+		check(hr, "failed to create stroke style")
+		defer stroke->Release()
+
+		Pack2 :: struct {
+			node:   yoga.Node_Ref,
+			offset: [2]f32,
+			hue:    f32,
+			depth:  int,
+		}
+		q: queue.Queue(Pack2)
+		queue.init(&q, allocator = context.temp_allocator)
+
+		node := node
+		offset: [2]f32
+		hue: f32
+		depth: int
+		for {
+			pos := offset + {yoga.NodeLayoutGetLeft(node), yoga.NodeLayoutGetTop(node)}
+			rect := d2w.D2D_RECT_F{pos[0], pos[1], pos[0] + yoga.NodeLayoutGetWidth(node), pos[1] + yoga.NodeLayoutGetHeight(node)}
+
+			saturation := f32(1.0)
+			{
+				color := linalg.vector4_hsl_to_rgb_f32(hue, saturation, 0.6)
+				brush->SetColor(cast(^d2w.D2D1_COLOR_F)&color)
+				render_target->FillRectangle(&rect, brush)
+			}
+			{
+				color := linalg.vector4_hsl_to_rgb_f32(hue, saturation, 0.1)
+				brush->SetColor(cast(^d2w.D2D1_COLOR_F)&color)
+				render_target->DrawRectangle(&rect, brush, 1, stroke)
+			}
+
+			hash := hash.fnv32a(slice.bytes_from_ptr(&rect, size_of(rect)))
+			hue = f32(hash % 255) / 255
+
+			for i in 0 ..< yoga.NodeGetChildCount(node) {
+				queue.append(&q, Pack2{yoga.NodeGetChild(node, i), pos, hue + 0.0 * f32(i), depth + 1})
+			}
+
+			node, offset, hue, depth = expand_values(queue.pop_front_safe(&q) or_break)
+		}
+	}
+	hr = render_target->EndDraw(nil, nil)
+	check(hr, "failed to end draw")
+
+	device_ctx->CopyResource(tex_rb, tex_rt)
+
+	mapped: d3d11.MAPPED_SUBRESOURCE
+	hr = device_ctx->Map(tex_rb, 0, .READ, {}, &mapped)
+	check(hr, "failed to map readback texture")
+
+	{
+		FORMAT :: [4]u8
+		packed_image: [^]FORMAT
+
+		if ideal_pitch := size_of(FORMAT) * width; ideal_pitch == mapped.RowPitch {
+			packed_image = auto_cast mapped.pData
+		} else {
+			dst, _ := mem.alloc_bytes_non_zeroed(int(height * ideal_pitch), allocator = context.temp_allocator)
+			src := cast([^]byte)mapped.pData
+			for a in 0 ..< height {
+				mem.copy_non_overlapping(&dst[a * ideal_pitch], &src[a * mapped.RowPitch], int(ideal_pitch))
+			}
+			packed_image = auto_cast raw_data(dst)
+		}
+
+		data := slice.from_ptr(packed_image, int(width * height))
+		out := image.pixels_to_image(data, int(width), int(height)) or_else panic("failed to create image")
+
+		output: bytes.Buffer
+		{
+			bytes.buffer_init_allocator(&output, 0, 0, context.temp_allocator)
+			err := tga.save_to_buffer(&output, &out, {}, context.temp_allocator)
+			assert(err == nil, "failed to save buffer")
+		}
+		{
+			name := fmt.tprintf("image_%v.tga", loc.procedure)
+			err := os2.write_entire_file(name, bytes.buffer_to_bytes(&output))
+			assert(err == nil, "failed to save buffer")
+		}
+	}
+}
 
 @(private = "file", deferred_out = yoga.NodeFreeRecursive)
 yoga_tree :: proc(user: ^Ly_Node, loc := #caller_location) -> yoga.Node_Ref {
@@ -200,6 +380,8 @@ yoga_validate :: proc(t: ^testing.T, node: yoga.Node_Ref, available: [2]Ly_Lengt
 			node, offset = expand_values(queue.pop_front_safe(&q) or_break)
 		}
 	}
+
+	yoga_draw(node, loc)
 }
 
 @(test)
