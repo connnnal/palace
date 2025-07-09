@@ -57,8 +57,9 @@ main :: proc() {
 					for i in 0 ..< 4 {
 						im_leaf(id("child", i), {size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16, fmt.tprintf("hi!!! %v", i)}})
 					}
-					im_leaf(id("foo"), {size = {0.3, 100}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "let's do some word wrapping! :^)"}})
-					im_leaf(id("foo3"), {size = {0.2, 0.2}, color = .Content, text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
+					im_leaf(id("foo"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "let's do some word wrapping! :^)"}})
+					im_leaf(id("foo2"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
+					im_leaf(id("foo3"), {color = .Content, text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 				}
 			}
 			im_recurse(root, area)
