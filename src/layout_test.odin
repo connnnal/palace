@@ -290,6 +290,79 @@ test_padding_container_match_child :: proc(t: ^testing.T) {
 	testing.expect_value(t, root_child0.measure.size.y, 10)
 }
 
+// Custom (not from Yoga repo).
+@(test)
+test_custom_navbar :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.flow = .Col
+	root.style.size = {1.0, 1.0}
+
+	root_nav := new(Ly_Node, context.temp_allocator)
+	root_nav.style.size = {1.0, nil}
+	root_nav.style.padding = {32, 32, 32, 32}
+	ly_node_insert(root, root_nav)
+
+	root_content := new(Ly_Node, context.temp_allocator)
+	root_content.style.flow = .Col
+	root_content.style.size = {nil, nil}
+	root_content.style.padding = {32, 32, 32, 32}
+	root_content.style.gap = 8
+	ly_node_insert(root, root_content)
+
+	root_content_child0 := new(Ly_Node, context.temp_allocator)
+	root_content_child0.style.size = {32, 32}
+	ly_node_insert(root_content, root_content_child0)
+
+	root_content_child1 := new(Ly_Node, context.temp_allocator)
+	root_content_child1.style.size = {0.5, 100}
+	ly_node_insert(root_content, root_content_child1)
+
+	root_content_child2 := new(Ly_Node, context.temp_allocator)
+	root_content_child2.style.size = {0.25, 120}
+	ly_node_insert(root_content, root_content_child2)
+
+	root_content_child3 := new(Ly_Node, context.temp_allocator)
+	root_content_child3.style.size = {nil, 80}
+	ly_node_insert(root_content, root_content_child3)
+
+	ly_compute_flexbox_layout(root, {1920, 1080})
+
+	testing.expect_value(t, root.measure.pos.x, 0)
+	testing.expect_value(t, root.measure.pos.y, 0)
+	testing.expect_value(t, root.measure.size.x, 1920)
+	testing.expect_value(t, root.measure.size.y, 1080)
+
+	testing.expect_value(t, root_nav.measure.pos.x, 0)
+	testing.expect_value(t, root_nav.measure.pos.y, 0)
+	testing.expect_value(t, root_nav.measure.size.x, 1920)
+	testing.expect_value(t, root_nav.measure.size.y, 64)
+
+	testing.expect_value(t, root_content.measure.pos.x, 0)
+	testing.expect_value(t, root_content.measure.pos.y, 64)
+	testing.expect_value(t, root_content.measure.size.x, 1920)
+	testing.expect_value(t, root_content.measure.size.y, 420)
+
+	testing.expect_value(t, root_content_child0.measure.pos.x, 32)
+	testing.expect_value(t, root_content_child0.measure.pos.y, 64 + 32)
+	testing.expect_value(t, root_content_child0.measure.size.x, 32)
+	testing.expect_value(t, root_content_child0.measure.size.y, 32)
+
+	testing.expect_value(t, root_content_child1.measure.pos.x, 32)
+	testing.expect_value(t, root_content_child1.measure.pos.y, 64 + 32 + 8 + 32)
+	testing.expect_value(t, root_content_child1.measure.size.x, 928)
+	testing.expect_value(t, root_content_child1.measure.size.y, 100)
+
+	testing.expect_value(t, root_content_child2.measure.pos.x, 32)
+	testing.expect_value(t, root_content_child2.measure.pos.y, 64 + 32 + 8 + 32 + 8 + 100)
+	testing.expect_value(t, root_content_child2.measure.size.x, 464)
+	testing.expect_value(t, root_content_child2.measure.size.y, 120)
+
+	testing.expect_value(t, root_content_child3.measure.pos.x, 32)
+	testing.expect_value(t, root_content_child3.measure.pos.y, 64 + 32 + 8 + 32 + 8 + 100 + 8 + 120)
+	testing.expect_value(t, root_content_child3.measure.size.x, 1856)
+	testing.expect_value(t, root_content_child3.measure.size.y, 80)
+}
+
 // @(test)
 // test_android_news_feed :: proc(t: ^testing.T) {
 // 	root := new(Ly_Node, context.temp_allocator)
