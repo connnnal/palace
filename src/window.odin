@@ -149,7 +149,8 @@ wind_init :: proc "contextless" () {
 
 			wind_paint(this)
 
-			return 0
+			// TODO: Return 0 here?? If we do, rendering never hits the main loop?
+			break
 		case win.WM_CHAR:
 			wchar := win.WCHAR(wparam)
 			if wparam >= 0xd800 && wparam <= 0xdbff {

@@ -84,8 +84,7 @@ Im_Node :: struct {
 	id:          Id,
 	frame:       Frame,
 	using decor: Im_Decor,
-	text:        Maybe(Text_Desc),
-	text_layout: ^d2w.IDWriteTextLayout,
+	text:        Maybe(Text_Layout_State),
 }
 
 // TODO: Faster to set global, then memcpy back? Not ptr?
@@ -132,6 +131,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 		break
 	case:
 		// Node is stale, break continuity.
+		text_state_destroy(&node.text)
 		node^ = {}
 	}
 
@@ -139,7 +139,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 
 	node.decor = props.decor
 	node.style = props.constants
-	node.text = props.text
+	text_state_hydrate(&node.text, props.text)
 
 	node.id = id
 	node.frame = im_state.frame
@@ -152,21 +152,17 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 	if _, ok := props.text.?; ok {
 		text_measure :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
 			node := cast(^Im_Node)node
-			text := &node.text.? or_else log.panic("bad text measure latent")
 
-			layout, handle := text_cache_measure(
-				Text_Measure_Key {
-					available,
-					text.contents,
-					Text_Format_Key{typeface = text.typeface, font_weight = text.font_weight, font_style = text.font_style, size = text.size},
-				},
-			)
+			available := [2]f32{available.x != nil ? f32(available.x.(i32)) : max(f32), available.y != nil ? f32(available.y.(i32)) : max(f32)}
+			layout := text_state_cache(&node.text, available)
 
+			// Fear not! DWrite metrics are lazily evaluated.
+			// Updating props can trigger a slow or fast path, depending on their type.
+			// I.e. writing max dimensions is free, as text break sizes from the last
+			// calculation are used to control invalidation.
 			metrics: d2w.DWRITE_TEXT_METRICS
 			hr := layout->GetMetrics(&metrics)
 			check(hr, "failed to get text metrics")
-
-			node.text_layout = layout
 
 			return {i32(metrics.width), i32(metrics.height)}
 		}

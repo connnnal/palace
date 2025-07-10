@@ -17,8 +17,12 @@ main :: proc() {
 	w: Window
 	w.paint_callback = paint_callback
 
+	@(static) frame: i32 = 0
+
 	paint_callback :: proc(w: ^Window, area: [2]i32, dt: f32) {
 		runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
+		defer frame += 1
 
 		hr: win.HRESULT
 
@@ -55,9 +59,10 @@ main :: proc() {
 				}
 				if root := im_scope(id("content"), {flow = .Col, gap = 8, padding = {32, 32, 32, 32}, color = .Foreground}); true {
 					for i in 0 ..< 4 {
+						(frame % 60 > 30) or_break
 						node := im_leaf(
 							id("child", i),
-							{size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16, fmt.tprintf("hi!!! %v", i)}},
+							{size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + (frame % 4), fmt.tprintf("hi!!! %v", i)}},
 						)
 
 						it: int
@@ -66,12 +71,16 @@ main :: proc() {
 							wind_events_pop(&it)
 						}
 					}
-					im_leaf(id("foo"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "let's do some word wrapping! :^)"}})
+					im_leaf(id("foo"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128 + (frame % 4) * 8, "let's do some word wrapping! :^)"}})
 					im_leaf(id("foo2"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
 					im_leaf(id("foo3"), {color = .Content, text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 				}
 			}
-			im_recurse(root, area)
+
+			// TODO: Not a correct solution.
+			if area.x > 0 && area.y > 0 {
+				im_recurse(root, area)
+			}
 
 			// log.info("\n", im_dump(root))
 
@@ -86,10 +95,9 @@ main :: proc() {
 			rect := d2w.D2D_RECT_F{f32(v.measure.pos.x), f32(v.measure.pos.y), f32(v.measure.size.x + v.measure.pos.x), f32(v.measure.size.y + v.measure.pos.y)}
 			w.render_target->FillRectangle(&rect, brushes[v.color])
 
-			if v.text_layout != nil {
-				point := d2w.D2D_POINT_2F{f32(v.measure.pos.x), f32(v.measure.pos.y)}
-				w.render_target->DrawTextLayout(point, v.text_layout, brushes[.Text], d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
-			}
+			layout := text_state_get_valid_layout(&v.text) or_continue
+			point := d2w.D2D_POINT_2F{f32(v.measure.pos.x), f32(v.measure.pos.y)}
+			w.render_target->DrawTextLayout(point, layout, brushes[.Text], d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
 		}
 
 		D2DERR_RECREATE_TARGET :: transmute(win.HRESULT)u32(0x8899000C)
