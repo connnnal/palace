@@ -5,7 +5,6 @@ import sa "core:container/small_array"
 import "core:fmt"
 import "core:hash"
 import "core:log"
-import "core:os/os2"
 import "core:strings"
 
 import d2w "lib:odin_d2d_dwrite"
@@ -115,7 +114,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 	parent, has_parent := sa.get_safe(im_state.stack, im_state.stack.len - 1)
 	id := id_extend(id, has_parent ? parent.id : 0)
 
-	key_ptr, value_ptr, just_inserted := map_entry(&im_state.cache, id) or_else log.panic("failed to allocate map space")
+	_, value_ptr, just_inserted := map_entry(&im_state.cache, id) or_else log.panic("failed to allocate map space")
 	if just_inserted {
 		// TODO: Which allocator?
 		value_ptr^ = new(Im_Node, context.allocator)

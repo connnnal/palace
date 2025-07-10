@@ -22,36 +22,28 @@ Text_Desc :: struct {
 	contents:    string,
 }
 
-Text_Format_Key :: struct {
-	typeface:    Text_Typeface,
-	font_weight: d2w.DWRITE_FONT_WEIGHT,
-	font_style:  d2w.DWRITE_FONT_STYLE,
-	size:        i32,
-}
-
-#assert(len(d2w.DWRITE_FONT_WEIGHT) == 17)
-
-Text_Measure_Key :: struct {
-	available:    [2]Ly_Length,
-	contents:     string,
-	using format: Text_Format_Key,
-}
-
-Query_Format :: struct {}
-
 text_state: struct {
 	factory:    ^d2w.IDWriteFactory5,
 	loader:     ^d2w.IDWriteInMemoryFontFileLoader,
 	collection: ^d2w.IDWriteFontCollection1,
+	names:      [Text_Typeface]win.wstring,
 }
 
 @(init)
 text_init :: proc "contextless" () {
 	context = default_context()
 
+	text_state.names = {
+		.Body    = win.L("Epilogue"),
+		.Special = win.L("Epilogue"),
+	}
+
 	hr := d2w.DWriteCreateFactory(.ISOLATED, d2w.IDWriteFactory5_UUID, (^rawptr)(&text_state.factory))
 	check(hr, "failed to create dwrite factory")
 
+	// Can we tell DWrite to ignore the system collection?
+	// Checking it for the default(?) font causes a significant slowdown (~.1ms).
+	// https://www.chromium.org/developers/design-documents/directwrite-font-proxy/.
 	hr = text_state.factory->CreateInMemoryFontFileLoader(&text_state.loader)
 	check(hr, "failed to create in memory font file loader")
 
@@ -158,7 +150,7 @@ text_state_cache :: proc(backing: ^Maybe(Text_Layout_State), available: [2]f32) 
 		}
 		if invalid {
 			hr := text_state.factory->CreateTextFormat(
-				win.L("Epilogue"),
+				text_state.names[props.typeface],
 				text_state.collection,
 				props.font_weight,
 				.NORMAL,

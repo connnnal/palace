@@ -53,7 +53,7 @@ Window :: struct #no_copy {
 	paint_callback: proc(w: ^Window, area: [2]i32, dt: f32),
 	area:           [2]i32,
 	im:             Im_State,
-	high_surrogate: Maybe(win.WCHAR),
+	high_surrogate: win.WCHAR,
 	modifiers:      In_Modifiers,
 	mouse:          Maybe([2]i32),
 	mouse_tracking: win.BOOL,
@@ -149,8 +149,7 @@ wind_init :: proc "contextless" () {
 
 			wind_paint(this)
 
-			// TODO: Return 0 here?? If we do, rendering never hits the main loop?
-			break
+			return 0
 		case win.WM_CHAR:
 			wchar := win.WCHAR(wparam)
 			if wparam >= 0xd800 && wparam <= 0xdbff {
@@ -158,19 +157,21 @@ wind_init :: proc "contextless" () {
 				// High surrogate. Store for joining to next mesage.
 				this.high_surrogate = wchar
 			} else {
-				defer this.high_surrogate = nil
+				// See above, a valid high surrogate is != 0.
+				defer this.high_surrogate = {}
 
 				buf_w: [3]win.WCHAR
-				if high_surrogate, ok := this.high_surrogate.?; ok {
-					buf_w = {high_surrogate, wchar, 0}
+				if this.high_surrogate != {} {
+					buf_w = {this.high_surrogate, wchar, 0}
 				} else {
 					buf_w = {wchar, 0, 0}
 				}
 
+				// TODO: Swap to utf16 buf variant.
 				buf_utf8: [4]u8
 				str := win.wstring_to_utf8(buf_utf8[:], raw_data(&buf_w))
 
-				if r, len := utf8.decode_rune_in_bytes(buf_utf8[:]); r != utf8.RUNE_ERROR {
+				if r, _ := utf8.decode_rune(str); r != utf8.RUNE_ERROR {
 					append(&wind_state.events, In_Event{this, this.modifiers, r})
 					return 0
 				}
@@ -292,6 +293,8 @@ wind_pump :: proc(w: ^Window) -> (keep_alive: bool = true) {
 }
 
 wind_paint :: proc(w: ^Window) -> (updated: bool) {
+	free_all(context.temp_allocator)
+
 	(w.render_target->CheckWindowState() == .NONE) or_return
 
 	dt: f32

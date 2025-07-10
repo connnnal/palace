@@ -3,10 +3,8 @@ package main
 import "base:runtime"
 import "core:fmt"
 import "core:log"
-import "core:math"
 import "core:math/rand"
 import "core:text/match"
-import "core:time"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
@@ -62,7 +60,7 @@ main :: proc() {
 						(frame % 60 > 30) or_break
 						node := im_leaf(
 							id("child", i),
-							{size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + (frame % 4), fmt.tprintf("hi!!! %v", i)}},
+							{size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + (frame % 4), fmt.tprintf("hi!!! %v", frame)}},
 						)
 
 						it: int
@@ -114,9 +112,6 @@ main :: proc() {
 	defer wind_close(&w)
 
 	for {
-		free_all(context.temp_allocator)
-
 		wind_pump(&w) or_break
-		wind_paint(&w)
 	}
 }
