@@ -18,20 +18,9 @@ Text_Desc :: struct {
 	font_weight: d2w.DWRITE_FONT_WEIGHT,
 	font_style:  d2w.DWRITE_FONT_STYLE,
 	size:        i32,
-	// using _:  bit_field u64 {
-	// 	typeface:    Text_Typeface          | 32,
-	// 	font_weight: d2w.DWRITE_FONT_WEIGHT | 16,
-	// 	font_style:  d2w.DWRITE_FONT_STYLE  | 16,
-	// },
 	contents:    string,
 }
 
-// Text_Format_Key :: bit_field u64 {
-// 	typeface:    Text_Typeface          | 8,
-// 	font_weight: d2w.DWRITE_FONT_WEIGHT | 16,
-// 	font_style:  d2w.DWRITE_FONT_STYLE  | 8,
-// 	size:        i32                    | 32,
-// }
 Text_Format_Key :: struct {
 	typeface:    Text_Typeface,
 	font_weight: d2w.DWRITE_FONT_WEIGHT,
@@ -150,8 +139,6 @@ text_cache_measure :: proc(key: Text_Measure_Key) -> (^d2w.IDWriteTextLayout, Te
 
 	if just_inserted {
 		format, _ := text_cache_format(key)
-
-		log.info("new!!")
 
 		str := win.utf8_to_utf16(key.contents, context.temp_allocator)
 		hr := text_state.factory->CreateTextLayout(
