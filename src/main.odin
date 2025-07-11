@@ -56,22 +56,30 @@ main :: proc() {
 
 				}
 				if root := im_scope(id("content"), {flow = .Col, gap = 8, padding = {32, 32, 32, 32}, color = .Foreground}); true {
-					for i in 0 ..< 4 {
-						(frame % 60 > 30) or_break
-						node := im_leaf(
-							id("child", i),
-							{size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + (frame % 4), fmt.tprintf("hi!!! %v", frame)}},
-						)
+					// for i in 0 ..< 4 {
+					// 	(frame % 60 > 30) or_break
+					// 	node := im_leaf(
+					// 		id("child", i),
+					// 		{size = {32, 32}, color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + (frame % 4), fmt.tprintf("hi!!! %v", frame)}},
+					// 	)
 
-						it: int
-						for input in wind_events_next(&it, w) {
-							node.color = .Text
-							wind_events_pop(&it)
-						}
+					// 	it: int
+					// 	for input in wind_events_next(&it, w) {
+					// 		node.color = .Text
+					// 		wind_events_pop(&it)
+					// 	}
+					// }
+					// im_leaf(id("foo"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128 + (frame % 4) * 8, "let's do some word wrapping! :^)"}})
+					// im_leaf(id("foo2"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
+					// im_leaf(id("foo3"), {color = .Content, text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
+					node := im_leaf(id("foo3"), {color = .Content, text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
+					if frame % 60 > 30 {
+						_ = im_widget_hydrate(&w.im, node, Im_Widget_Textbox)
+						// log.info(box)
+					} else {
+						_ = im_widget_hydrate(&w.im, node, Im_Widget_Button)
+						// log.info(box)
 					}
-					im_leaf(id("foo"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128 + (frame % 4) * 8, "let's do some word wrapping! :^)"}})
-					im_leaf(id("foo2"), {color = .Content, text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
-					im_leaf(id("foo3"), {color = .Content, text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 				}
 			}
 
@@ -79,6 +87,7 @@ main :: proc() {
 			if area.x > 0 && area.y > 0 {
 				im_recurse(root, area)
 			}
+			im_hot(&w.im, w.mouse, dt)
 
 			// log.info("\n", im_dump(root))
 
@@ -91,6 +100,7 @@ main :: proc() {
 
 		for v in w.im.draws {
 			rect := d2w.D2D_RECT_F{f32(v.measure.pos.x), f32(v.measure.pos.y), f32(v.measure.size.x + v.measure.pos.x), f32(v.measure.size.y + v.measure.pos.y)}
+			brushes[v.color]->SetColor(&{0, 0, v.hot, 1})
 			w.render_target->FillRectangle(&rect, brushes[v.color])
 
 			layout := text_state_get_valid_layout(&v.text) or_continue

@@ -298,12 +298,12 @@ wind_paint :: proc(w: ^Window) -> (updated: bool) {
 	(w.render_target->CheckWindowState() == .NONE) or_return
 
 	dt: f32
+	now := time.tick_now()
 	if last := w.last_paint; last != {} {
-		w.last_paint = time.tick_now()
-
-		diff := time.tick_diff(last, w.last_paint)
+		diff := time.tick_diff(last, now)
 		dt = cast(f32)time.duration_seconds(diff)
 	}
+	w.last_paint = now
 
 	w.paint_callback(w, w.area, dt)
 

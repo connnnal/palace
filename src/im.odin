@@ -5,6 +5,7 @@ import sa "core:container/small_array"
 import "core:fmt"
 import "core:hash"
 import "core:log"
+import "core:math"
 import "core:strings"
 
 import d2w "lib:odin_d2d_dwrite"
@@ -84,6 +85,8 @@ Im_Node :: struct {
 	frame:       Frame,
 	using decor: Im_Decor,
 	text:        Maybe(Text_Layout_State),
+	hot:         f32,
+	wrapper:     Im_Wrapper,
 }
 
 // TODO: Faster to set global, then memcpy back? Not ptr?
@@ -186,6 +189,25 @@ im_recurse :: proc(root: ^Im_Node, available: [2]i32) {
 	ly_compute_flexbox_layout(root, {available.x, available.y})
 }
 
+// TODO: Ideally this is template-ised on the "mouse_ok" param.
+im_hot :: proc(state: ^Im_State, mouse: Maybe([2]i32), dt: f32) {
+	mouse, mouse_ok := mouse.?
+
+	for _, &node in state.cache {
+		in_bounds: bool
+
+		#no_bounds_check if mouse_ok {
+			measure := node.ly.measure
+
+			into := mouse - measure.pos
+			size := measure.size
+			in_bounds = into.x >= 0 && into.y < size.x && into.y >= 0 && into.y < size.y
+		}
+
+		node.hot = exp_decay(node.hot, in_bounds ? 1 : 0, 28, dt)
+	}
+}
+
 im_dump :: proc(node: ^Im_Node, allocator := context.temp_allocator) -> string {
 	b: strings.Builder
 	strings.builder_init(&b, allocator)
@@ -226,4 +248,14 @@ im_state_draws :: proc(state: ^Im_State, node: ^Im_Node) {
 	for node := node.last; node != nil; node = node.prev {
 		im_state_draws(state, cast(^Im_Node)node)
 	}
+}
+
+// "a = expDecay(a, b, decay, deltaTime)"
+// Where dt is in seconds, decay is ~1..<25.
+// https://youtu.be/LSNQuFEDOyQ?t=3000.
+exp_decay :: proc "contextless" (a, b, decay, dt: f32) -> f32 {
+	// TODO: Replace "exp" with an approximation.
+	// http://spfrnd.de/posts/2018-03-10-fast-exponential.html.
+	// https://scicomp.stackexchange.com/a/37322.
+	return b + (a - b) * math.exp(-decay * dt)
 }
