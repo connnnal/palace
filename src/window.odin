@@ -160,16 +160,15 @@ wind_init :: proc "contextless" () {
 				// See above, a valid high surrogate is != 0.
 				defer this.high_surrogate = {}
 
-				buf_w: [3]win.WCHAR
+				buf_utf16: [2]win.WCHAR
 				if this.high_surrogate != {} {
-					buf_w = {this.high_surrogate, wchar, 0}
+					buf_utf16 = {this.high_surrogate, wchar}
 				} else {
-					buf_w = {wchar, 0, 0}
+					buf_utf16 = {wchar, 0}
 				}
 
-				// TODO: Swap to utf16 buf variant.
 				buf_utf8: [4]u8
-				str := win.wstring_to_utf8(buf_utf8[:], raw_data(&buf_w))
+				str := win.utf16_to_utf8(buf_utf8[:], buf_utf16[:])
 
 				if r, _ := utf8.decode_rune(str); r != utf8.RUNE_ERROR {
 					append(&wind_state.events, In_Event{this, this.modifiers, r})
@@ -227,7 +226,7 @@ wind_shutdown :: proc "contextless" () {
 }
 
 wind_open :: proc(w: ^Window) -> (ok: bool) {
-	im_state_init(&w.im)
+	im_state_init(&w.im, context.allocator)
 
 	WINDOW_STYLE :: win.WS_OVERLAPPEDWINDOW
 
@@ -264,7 +263,7 @@ wind_open :: proc(w: ^Window) -> (ok: bool) {
 
 	hr =
 	wind_state.factory->CreateHwndRenderTarget(
-		&d2w.D2D1_RENDER_TARGET_PROPERTIES{},
+		&d2w.D2D1_RENDER_TARGET_PROPERTIES{pixelFormat = {.UNKNOWN, .PREMULTIPLIED}},
 		&d2w.D2D1_HWND_RENDER_TARGET_PROPERTIES{hwnd = w.wnd, pixelSize = {WIDTH, HEIGHT}},
 		&w.render_target,
 	)

@@ -392,7 +392,7 @@ test_custom_navbar :: proc(t: ^testing.T) {
 
 // Custom (not from Yoga repo).
 @(test)
-test_padding_edge :: proc(t: ^testing.T) {
+test_custom_padding_edge :: proc(t: ^testing.T) {
 	root := new(Ly_Node, context.temp_allocator)
 	root.style.size = {0.5, 1.0}
 

@@ -55,12 +55,12 @@ text_init :: proc "contextless" () {
 	check(hr, "failed to create font set builder")
 	defer builder->Release()
 
-	for v in ([?]string{"Black", "Light", "SemiBold"}) {
+	for v in ([?]string{"Black", "Light", "SemiBold", "BlackItalic", "LightItalic", "SemiBoldItalic"}) {
 		font: ^d2w.IDWriteFontFile
 
 		// TODO: Tie this to some IUnknown to avoid memcpy.
 		path := strings.join({`.\..\..\Downloads\Epilogue_Complete\Fonts\OTF\Epilogue-`, v, ".otf"}, "", context.temp_allocator)
-		data := os2.read_entire_file_from_path(path, context.temp_allocator) or_break
+		data := os2.read_entire_file_from_path(path, context.temp_allocator) or_continue
 		hr = text_state.loader->CreateInMemoryFontFileReference(text_state.factory, raw_data(data), auto_cast len(data), nil, &font)
 		check(hr, "failed to load font from memory")
 		defer font->Release()
@@ -186,7 +186,7 @@ text_state_cache :: proc(backing: ^Maybe(Text_Layout_State), available: [2]f32) 
 			// TODO: Gracefully handle text layouting failures.
 			temp: ^d2w.IDWriteTextLayout
 			hr := text_state.factory->CreateTextLayout(raw_data(str), cast(u32)len(str), backing.format, f32(available[0]), f32(available[1]), &temp)
-			checkf(hr, "failed to create text layout (%v)", str)
+			checkf(hr, "failed to create text layout (%v)", backing.contents)
 			defer temp->Release()
 
 			hr = temp->QueryInterface(d2w.IDWriteTextLayout3_UUID, (^rawptr)(&backing.layout))

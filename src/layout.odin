@@ -54,11 +54,13 @@ Ly_Constants :: struct {
 	align_items:     Ly_Align,
 	gap:             i32,
 	flow:            Ly_Axis_Flex,
+	grow:            bool,
 }
 
 Ly_Output :: struct {
 	pos:   [2]i32,
 	size:  [2]i32,
+	inner: [2]i32,
 	basis: i32, // Flex basis
 }
 
@@ -114,7 +116,7 @@ ly_evaluate_length :: proc(dim: Ly_Dim, available: Ly_Length) -> (length: Ly_Len
 
 ly_available_inner :: proc(style: Ly_Constants, available: [2]Ly_Length) -> (out: [2]Ly_Length) #no_bounds_check {
 	if value, ok := ly_evaluate_length(style.size[0], available[0]).?; ok {
-		out[0] = value
+		out[0] = value - (style.margin[0] + style.padding[0]) * 2
 	} else {
 		if value, ok := available[0].?; ok {
 			// 9.2.2:
@@ -124,7 +126,7 @@ ly_available_inner :: proc(style: Ly_Constants, available: [2]Ly_Length) -> (out
 		}
 	}
 	if value, ok := ly_evaluate_length(style.size[1], available[1]).?; ok {
-		out[1] = value
+		out[1] = value - (style.margin[1] + style.padding[1]) * 2
 	} else {
 		if value, ok := available[1].?; ok {
 			// 9.2.2:
@@ -143,9 +145,23 @@ ly_outer :: proc(style: Ly_Constants, available: [2]Ly_Length, content: [2]i32) 
 	}
 }
 
-ly_position_flexbox :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
-	available_inner := ly_available_inner(node.style, available)
+ly_inner :: proc(style: Ly_Constants, available: [2]Ly_Length, content: [2]i32) -> (out: [2]i32) #no_bounds_check {
+	if value, ok := ly_evaluate_length(style.size[0], available[0]).?; ok {
+		out[0] = value - (style.margin[0] + style.padding[0]) * 2
+	} else {
+		out[0] = content[0]
+	}
+	if value, ok := ly_evaluate_length(style.size[1], available[1]).?; ok {
+		out[1] = value - (style.margin[0] + style.padding[0]) * 2
+	} else {
+		out[1] = content[1]
+	}
+	return
+}
 
+ly_position_flexbox :: proc(node: ^Ly_Node) {
+	// available_inner := ly_available_inner(node.style, {node.measure.size.x, node.measure.size.y})
+	available_inner := node.measure.inner
 	mx := node.style.flow
 	cx: Ly_Axis_Flex = node.style.flow == .Row ? .Col : .Row
 
@@ -162,29 +178,32 @@ ly_position_flexbox :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 
 	switch node.style.align_items {
 	case .Stretch:
-		if cross_size, ok := available_inner[int(cx)].?; ok {
-			for child := node.first; child != nil; child = child.next {
-				if child.style.size[int(cx)] == nil {
-					child.measure.size[int(cx)] = cross_size
-				}
+		cross_size := available_inner[int(cx)]
+		// if cross_size, ok := available_inner[int(cx)].?; ok {
+		for child := node.first; child != nil; child = child.next {
+			if child.style.size[int(cx)] == nil {
+				diff := (cross_size - child.measure.size[int(cx)])
+				child.measure.size[int(cx)] += diff
+				child.measure.inner[int(cx)] += diff
 			}
 		}
+	// }
 	case .FlexStart:
 	case .FlexEnd:
 		for child := node.first; child != nil; child = child.next {
-			off := (available_inner[int(cx)].? or_else 0) - child.measure.size[int(cx)]
+			off := available_inner[int(cx)] - child.measure.size[int(cx)]
 			child.measure.pos[int(cx)] += off
 		}
 	case .Center:
 		for child := node.first; child != nil; child = child.next {
-			off := (available_inner[int(cx)].? or_else 0) - child.measure.size[int(cx)]
+			off := available_inner[int(cx)] - child.measure.size[int(cx)]
 			child.measure.pos[int(cx)] += off / 2
 		}
 	case .Baseline:
 	}
 
 	for child := node.first; child != nil; child = child.next {
-		ly_position_flexbox(child, available_inner)
+		ly_position_flexbox(child)
 	}
 }
 
@@ -193,19 +212,23 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 	if node.style.measure_func != nil {
 		// TODO: Kind of a hack to resume typical layout flow after measuring.
 		outer_size := node.style.measure_func(node, available)
-		node.style.size = {outer_size.x, outer_size.y}
+		node.measure.size = {outer_size.x, outer_size.y}
+		node.measure.inner = node.measure.inner
+		return node.measure.size
 	}
-
-	available_inner := ly_available_inner(node.style, available)
 
 	mx := node.style.flow
 	cx: Ly_Axis_Flex = node.style.flow == .Row ? .Col : .Row
 
 	content: [2]i32
 	{
+		available_inner := ly_available_inner(node.style, available)
+
 		child_count: i32 = 0
 		for child := node.first; child != nil; child = child.next {
 			defer child_count += 1
+
+			(child.style.grow == false) or_continue
 
 			ly_compute_flexbox_layout(child, available_inner)
 			content[int(mx)] += child.measure.size[int(mx)]
@@ -213,11 +236,28 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 		}
 
 		content[i32(mx)] += node.style.gap * max(0, child_count - 1)
+
+		free_mx: i32
+		if available_inner[int(mx)] != nil {
+			free_mx = available_inner[int(mx)].(i32) - content[int(mx)]
+		}
+
+		for child := node.first; child != nil; child = child.next {
+			(child.style.grow == true) or_continue
+
+			available_inner.x = free_mx
+			child.style.size[int(mx)] = 1.0
+
+			ly_compute_flexbox_layout(child, available_inner)
+			content[int(mx)] += child.measure.size[int(mx)]
+			content[int(cx)] = max(content[cx], child.measure.size[int(cx)])
+		}
 	}
 
 	node.measure.size = ly_outer(node.style, available, content)
+	node.measure.inner = ly_inner(node.style, available, content)
 
-	ly_position_flexbox(node, available)
+	ly_position_flexbox(node)
 
 	return node.measure.size
 }

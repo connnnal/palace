@@ -10,13 +10,6 @@ import "core:strings"
 
 import d2w "lib:odin_d2d_dwrite"
 
-Palette :: enum {
-	Background,
-	Foreground,
-	Content,
-	Text,
-}
-
 Id :: u32
 
 @(private)
@@ -75,7 +68,7 @@ im_state_destroy :: proc(state: ^Im_State) {
 }
 
 Im_Decor :: struct {
-	color: Palette,
+	color: [4]f32,
 }
 
 // Ly_Node as the first parameter to allow downcasting.
@@ -201,7 +194,7 @@ im_hot :: proc(state: ^Im_State, mouse: Maybe([2]i32), dt: f32) {
 
 			into := mouse - measure.pos
 			size := measure.size
-			in_bounds = into.x >= 0 && into.y < size.x && into.y >= 0 && into.y < size.y
+			in_bounds = into.x >= 0 && into.x < size.x && into.y >= 0 && into.y < size.y
 		}
 
 		node.hot = exp_decay(node.hot, in_bounds ? 1 : 0, 28, dt)
