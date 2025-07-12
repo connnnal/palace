@@ -22,6 +22,7 @@ Render :: struct {
 Palette :: enum {
 	Void,
 	Background,
+	Midground,
 	Foreground,
 	Content,
 	Text,
@@ -33,8 +34,7 @@ main :: proc() {
 	w: Window
 	w.paint_callback = paint_callback
 
-	@(static) frame: i32 = 0
-	@(static) interval: i32 = 0
+	@(static) frame: int
 
 	@(static) img: ^image.Image
 	img = image.load_from_bytes(#load("../rsc/paper-6-TEX.png"), {.alpha_add_if_missing, .alpha_premultiply}) or_else panic("ah!")
@@ -46,6 +46,7 @@ main :: proc() {
 		p: [Palette][4]f32
 		p[.Void] = {100.0 / 255, 118.0 / 255, 140.0 / 255, 1}
 		p[.Background] = {0.95, 0.91, 0.89, 1}
+		p[.Midground] = {0.99, 0.98, 0.97, 1}
 		p[.Foreground] = {1, 1, 1, 1}
 		p[.Text] = {0, 0.18, 0.14, 1}
 		p[.Content] = {0, 0, 1, 1}
@@ -91,10 +92,8 @@ main :: proc() {
 			}
 		}
 
-		defer {
-			interval += 1
-			frame = (interval / 60)
-		}
+		defer frame += 1
+		frame := frame / 5
 
 		hr: win.HRESULT
 
@@ -103,20 +102,20 @@ main :: proc() {
 
 		when true {
 			root: ^Im_Node
-			if root = im_scope(id("root"), {size = {1.0, nil}, flow = .Col, color = p[.Void]}); true {
+			if root = im_scope(id("root"), {size = {1.0, nil}, flow = .Col, color = p[.Midground]}); true {
 				if root := im_scope(id("header"), {size = {1.0, 64}, flow = .Row, color = p[.Foreground]}); true {
 
 				}
 				if root := im_scope(id("content"), {flow = .Row, gap = 32, padding = 32, color = p[.Background]}); true {
 					if root := im_scope(id("sidebar"), {flow = .Col, gap = 8, padding = 32, size = {500, nil}, color = p[.Foreground]}); true {
-						for i in 0 ..< 4 {
-							(frame % 60 > 30) or_break
+						for i in 0 ..< 4_000 {
+							(frame % 20 > 10) or_break
 							node := im_leaf(
 								id("child", i),
 								{
 									size = {32, 32},
 									color = p[.Content],
-									text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + (frame % 4), fmt.tprintf("hi!!! %v", frame)},
+									text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + i32((frame + i) % 4), fmt.tprintf("hi!!! %v", frame)},
 								},
 							)
 						}
@@ -128,15 +127,15 @@ main :: proc() {
 							_ = im_widget_hydrate(&w.im, node, Im_Widget_Button)
 							// log.info(box)
 						}
-						im_leaf(id("foo2"), {color = p[.Void], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
-						im_leaf(id("foo3"), {color = p[.Void], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
+						im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
+						im_leaf(id("foo3"), {color = p[.Midground], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 					}
 					if root := im_scope(id("inner"), {flow = .Col, gap = 8, padding = 64, grow = true, color = p[.Foreground]}); true {
-						im_leaf(id("foo2"), {color = p[.Void], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
-						im_leaf(id("foo3"), {color = p[.Void], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
+						im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
+						im_leaf(id("foo3"), {color = p[.Midground], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 						im_leaf(
 							id("foo"),
-							{color = p[.Foreground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128 + (frame % 4) * 8, "let's do some word wrapping! :^)"}},
+							{color = p[.Foreground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128 + i32(frame % 4) * 8, "let's do some word wrapping! :^)"}},
 						)
 					}
 				}

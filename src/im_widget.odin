@@ -55,9 +55,9 @@ handle_char_input :: proc(box: ^text_edit.State, codepoint: rune) {
 		// Ctrl+backspace.
 		text_edit.perform_command(box, .Delete_Word_Left)
 	case 27:
-	// Escape.
-	// focus = false
-	// fx.set_char_callback(nil)
+		// Escape.
+		// TODO: Handle exiting focus.
+		break
 	case 1:
 		// Ctrl+A.
 		text_edit.perform_command(box, .Select_All)

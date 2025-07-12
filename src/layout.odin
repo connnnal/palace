@@ -61,7 +61,6 @@ Ly_Output :: struct {
 	pos:   [2]i32,
 	size:  [2]i32,
 	inner: [2]i32,
-	basis: i32, // Flex basis
 }
 
 Ly_Node :: struct {
@@ -179,7 +178,6 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 	switch node.style.align_items {
 	case .Stretch:
 		cross_size := available_inner[int(cx)]
-		// if cross_size, ok := available_inner[int(cx)].?; ok {
 		for child := node.first; child != nil; child = child.next {
 			if child.style.size[int(cx)] == nil {
 				diff := (cross_size - child.measure.size[int(cx)])
@@ -187,7 +185,6 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 				child.measure.inner[int(cx)] += diff
 			}
 		}
-	// }
 	case .FlexStart:
 	case .FlexEnd:
 		for child := node.first; child != nil; child = child.next {

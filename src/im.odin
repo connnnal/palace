@@ -9,6 +9,7 @@ import "core:math"
 import "core:strings"
 
 import d2w "lib:odin_d2d_dwrite"
+import va "lib:virtual_array"
 
 Id :: u32
 
@@ -54,17 +55,20 @@ Im_State :: struct #no_copy {
 	cache:     map[Id]^Im_Node,
 	frame:     Frame,
 	draws:     [dynamic]^Im_Node,
+	nodes:     va.Virtual_Array(Im_Node),
 }
 
 im_state_init :: proc(state: ^Im_State, allocator := context.allocator) {
 	state.allocator = allocator
-	state.frame = 2
 	state.draws.allocator = allocator
+	state.cache.allocator = allocator
+	state.frame = 2
 }
 
 im_state_destroy :: proc(state: ^Im_State) {
 	delete(state.cache)
 	delete(state.draws)
+	va.destroy(&state.nodes)
 }
 
 Im_Decor :: struct {
@@ -112,8 +116,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 
 	_, value_ptr, just_inserted := map_entry(&im_state.cache, id) or_else log.panic("failed to allocate map space")
 	if just_inserted {
-		// TODO: Which allocator?
-		value_ptr^ = new(Im_Node, context.allocator)
+		value_ptr^, _ = va.alloc(&im_state.nodes)
 	}
 
 	node := value_ptr^
@@ -153,8 +156,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 
 			// Fear not! DWrite metrics are lazily evaluated.
 			// Updating props can trigger a slow or fast path, depending on their type.
-			// I.e. writing max dimensions is free, as text break sizes from the last
-			// calculation are used to control invalidation.
+			// I.e. max dimensions is free; text break sizes from the previous layout control invalidation.
 			metrics: d2w.DWRITE_TEXT_METRICS
 			hr := layout->GetMetrics(&metrics)
 			check(hr, "failed to get text metrics")
