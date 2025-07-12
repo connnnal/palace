@@ -3,7 +3,6 @@ package virtual_array
 import "base:intrinsics"
 import "core:mem"
 import "core:mem/virtual"
-import "core:slice"
 
 RESERVE_SIZE :: mem.Megabyte * 64
 COMMIT_SIZE :: mem.Kilobyte * 64
@@ -32,7 +31,7 @@ alloc :: proc "contextless" (va: ^$A/Virtual_Array($T), zero := true) -> (^T, in
 	if va.buf == nil {
 		@(cold)
 		init :: #force_no_inline proc "contextless" (va: ^$A/Virtual_Array($T)) {
-			buf, _err := virtual.reserve(RESERVE_SIZE)
+			buf := virtual.reserve(RESERVE_SIZE) or_else panic_contextless("failed to reserve")
 			va.buf = auto_cast raw_data(buf)
 
 			va.tide = uintptr(va.buf)
@@ -57,7 +56,7 @@ alloc :: proc "contextless" (va: ^$A/Virtual_Array($T), zero := true) -> (^T, in
 		grow :: #force_no_inline proc "contextless" (va: ^$A/Virtual_Array($T)) {
 			assert_contextless(va.tide - uintptr(va.buf) < RESERVE_SIZE, "at capacity")
 			err := virtual.commit(cast(rawptr)va.tide, COMMIT_SIZE)
-			assert_contextless(err == nil, "failed to reserve block")
+			assert_contextless(err == nil, "failed to commit block")
 			va.tide += COMMIT_SIZE
 		}
 		grow(va)
@@ -86,6 +85,10 @@ get :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T), #any_int idx
 	return &va.buf[idx].item, idx >= 0 && idx < va.count
 }
 
+len :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T)) -> int #no_bounds_check {
+	return va.count
+}
+
 as_slice :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T)) -> []T #no_bounds_check {
 	assert_contextless(va.free == FREE_INVALID, "virtual array has freelist holes, can't make a contiguous slice")
 	return va.buf[:va.count]
@@ -99,6 +102,6 @@ free_index :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T), #any_
 }
 
 free_item :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T), item: ^T) #no_bounds_check {
-	idx := intrinsics.ptr_sub(item, raw_data(&va.buf))
+	idx := intrinsics.ptr_sub(item, cast(^T)va.buf)
 	free_index(va, idx)
 }

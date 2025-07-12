@@ -166,11 +166,11 @@ when ENABLED {
 
 	@(deferred_none = EndEvent)
 	InstrumentationScope :: #force_inline proc "contextless" (id: string, data: string = {}, color: u32 = DEFAULT_COLOR) {
-		BeginEvent_N(transmute(cstring)raw_data(id), auto_cast len(id), transmute(cstring)raw_data(data), auto_cast len(data), color)
+		BeginEvent_N(cast(cstring)raw_data(id), auto_cast len(id), cast(cstring)raw_data(data), auto_cast len(data), color)
 	}
 
 	SetCurrentThreadName :: #force_inline proc "contextless" (name: string) {
-		SetCurrentThreadName_N(transmute(cstring)raw_data(name), auto_cast len(name))
+		SetCurrentThreadName_N(cast(cstring)raw_data(name), auto_cast len(name))
 	}
 } else {
 	InstrumentationScope :: #force_inline proc "contextless" (id: string, data: string = {}, color: u32 = DEFAULT_COLOR) {

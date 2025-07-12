@@ -1,6 +1,7 @@
 package main
 
 import "base:runtime"
+import "core:container/queue"
 import sa "core:container/small_array"
 import "core:fmt"
 import "core:hash"
@@ -73,6 +74,47 @@ im_state_destroy :: proc(state: ^Im_State) {
 	va.destroy(&state.widgets)
 }
 
+// TODO: Faster to set global, then memcpy back? Not ptr?
+@(thread_local)
+im_state: ^Im_State
+
+im_frame_begin :: proc(state: ^Im_State) {
+	assert(im_state == nil)
+	state.frame += 1
+	im_state = state
+}
+
+im_frame_end :: proc(state: ^Im_State) {
+	defer im_state = nil
+
+	for id, node in state.cache {
+		if node.frame != state.frame {
+			im_node_reset(node)
+			va.free_item(&state.nodes, node)
+			delete_key(&state.cache, id)
+		}
+	}
+}
+
+im_draws :: proc(state: ^Im_State, node: ^Im_Node) {
+	clear(&state.draws)
+
+	q: queue.Queue(^Im_Node)
+	queue.init(&q, allocator = context.temp_allocator)
+	defer queue.destroy(&q)
+
+	node := node
+	for {
+		append(&state.draws, node)
+
+		for node := node.last; node != nil; node = node.prev {
+			queue.push_back(&q, cast(^Im_Node)node)
+		}
+
+		node = queue.pop_front_safe(&q) or_break
+	}
+}
+
 Im_Decor :: struct {
 	color: [4]f32,
 }
@@ -88,18 +130,9 @@ Im_Node :: struct {
 	wrapper:     Im_Wrapper,
 }
 
-// TODO: Faster to set global, then memcpy back? Not ptr?
-@(thread_local)
-im_state: ^Im_State
-
-im_frame_begin :: proc(state: ^Im_State) {
-	assert(im_state == nil)
-	state.frame += 1
-	im_state = state
-}
-
-im_frame_end :: proc(state: ^Im_State) {
-	im_state = nil
+im_node_reset :: proc(node: ^Im_Node) {
+	text_state_destroy(&node.text)
+	im_widget_dyn_destroy(node.wrapper)
 }
 
 // Convenience wrapper over user-defined node properties.
@@ -131,8 +164,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 		break
 	case:
 		// Node is stale, break continuity.
-		text_state_destroy(&node.text)
-		im_widget_dyn_destroy(node.wrapper)
+		im_node_reset(node)
 		node^ = {}
 	}
 
@@ -233,14 +265,6 @@ im_dump :: proc(node: ^Im_Node, allocator := context.temp_allocator) -> string {
 	}
 
 	return strings.to_string(b)
-}
-
-im_state_draws :: proc(state: ^Im_State, node: ^Im_Node) {
-	append(&state.draws, node)
-
-	for node := node.last; node != nil; node = node.prev {
-		im_state_draws(state, cast(^Im_Node)node)
-	}
 }
 
 // "a = expDecay(a, b, decay, deltaTime)"

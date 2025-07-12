@@ -69,7 +69,7 @@ im_widget_textbox_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, w
 	text_edit.update_time(&wg.box)
 
 	it: int
-	for v in wind_events_next(&it, nil) {
+	for v in wind_events_next(&it, w) {
 		#partial switch inner in v.value {
 		case rune:
 			defer wind_events_pop(&it)
@@ -101,6 +101,7 @@ im_widget_textbox_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, w
 	}
 }
 im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: Render) {
+	hr: win.HRESULT
 	select: {
 		layout := text_state_get_valid_layout(&node.text) or_break select
 
@@ -109,7 +110,8 @@ im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: R
 		selection_low, selection_high := text_edit.sorted_selection(&wg.box)
 		hit_test: [8]d2w.DWRITE_HIT_TEST_METRICS
 		hit_test_count: u32
-		hr := layout->HitTestTextRange(
+		hr =
+		layout->HitTestTextRange(
 			u32(selection_low),
 			u32(selection_high),
 			f32(node.measure.pos.x),
@@ -129,7 +131,7 @@ im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: R
 		if hit, ok := wg.hit.?; ok {
 			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)}
 			metrics: d2w.DWRITE_HIT_TEST_METRICS
-			hr := layout->HitTestTextPosition(hit.textPosition, wg.trailing_hit, &pos[0], &pos[1], &metrics)
+			hr = layout->HitTestTextPosition(hit.textPosition, wg.trailing_hit, &pos[0], &pos[1], &metrics)
 			win.SUCCEEDED(hr) or_break select
 
 			render.brush->SetColor(auto_cast &{1, 1, 0, 1})
@@ -145,7 +147,7 @@ im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: R
 
 			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)}
 			metrics: d2w.DWRITE_HIT_TEST_METRICS
-			hr := layout->HitTestTextPosition(blip_loc, wg.trailing_hit, &pos[0], &pos[1], &metrics)
+			hr = layout->HitTestTextPosition(blip_loc, wg.trailing_hit, &pos[0], &pos[1], &metrics)
 			win.SUCCEEDED(hr) or_break select
 
 			render.brush->SetColor(auto_cast &{0, 1, 0, 1})
@@ -235,7 +237,7 @@ im_widget_hydrate :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, $T: type
 		im_widget_dyn_destroy(existing)
 	}
 	if !has_existing || existing_t != typeid_of(^T) {
-		buf, idx := va.alloc(&state.widgets)
+		buf, _ := va.alloc(&state.widgets)
 		out = cast(^T)buf
 
 		node.wrapper = out

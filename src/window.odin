@@ -335,7 +335,8 @@ wind_events_next :: proc(it: ^int, w: ^Window = nil) -> (^In_Event, bool) {
 	#no_bounds_check for it^ < len(wind_state.events) {
 		defer it^ += 1
 		input := &wind_state.events[it^]
-		(w == nil || input.w == w) or_continue
+		// If an input is bound to a window, we must pass that window to view it.
+		(input.w == nil || input.w == w) or_continue
 		return input, true
 	}
 	return nil, false

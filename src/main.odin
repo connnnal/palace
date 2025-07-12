@@ -8,7 +8,6 @@ import "core:image/png"
 import "core:log"
 import "core:math/rand"
 import "core:mem"
-import "core:text/match"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
@@ -142,6 +141,8 @@ main :: proc() {
 					}
 				}
 			}
+
+			im_draws(&w.im, root)
 		}
 
 		// TODO: Not a correct solution.
@@ -149,12 +150,9 @@ main :: proc() {
 			im_recurse(root, area)
 		}
 
-		clear(&w.im.draws)
-		im_state_draws(&w.im, root)
-
 		// Drain any uncollected inputs.
 		it: int
-		for v in wind_events_next(&it, w) {
+		for _ in wind_events_next(&it, w) {
 			wind_events_pop(&it)
 		}
 	}
