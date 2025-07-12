@@ -85,7 +85,11 @@ yoga_style :: proc(node: yoga.Node_Ref, style: Ly_Constants) {
 	}
 	// Padding.
 	for edge, i in ([?]yoga.Edge{.Left, .Right, .Top, .Bottom}) {
-		yoga.NodeStyleSetPadding(node, edge, f32(style.padding[i]))
+		yoga.NodeStyleSetPadding(node, edge, f32(style.padding_flat[i]))
+	}
+	// Margin.
+	for edge, i in ([?]yoga.Edge{.Left, .Right, .Top, .Bottom}) {
+		yoga.NodeStyleSetMargin(node, edge, f32(style.margin_flat[i]))
 	}
 	// Gap.
 	yoga.NodeStyleSetGap(node, .All, f32(style.gap))
@@ -330,7 +334,7 @@ test_flex_direction_row :: proc(t: ^testing.T) {
 test_padding_no_size :: proc(t: ^testing.T) {
 	root := new(Ly_Node, context.temp_allocator)
 	root.style.flow = .Col
-	root.style.padding = {10, 10, 10, 10}
+	root.style.padding = {10, 10}
 
 	ly_compute_flexbox_layout(root, {nil, nil})
 	yoga_validate(t, yoga_tree(root), {nil, nil})
@@ -340,7 +344,7 @@ test_padding_no_size :: proc(t: ^testing.T) {
 test_padding_container_match_child :: proc(t: ^testing.T) {
 	root := new(Ly_Node, context.temp_allocator)
 	root.style.flow = .Col
-	root.style.padding = {10, 10, 10, 10}
+	root.style.padding = {10, 10}
 
 	root_child0 := new(Ly_Node, context.temp_allocator)
 	root_child0.style.size = {10, 10}
@@ -359,13 +363,13 @@ test_custom_navbar :: proc(t: ^testing.T) {
 
 	root_nav := new(Ly_Node, context.temp_allocator)
 	root_nav.style.size = {1.0, nil}
-	root_nav.style.padding = {32, 32, 32, 32}
+	root_nav.style.padding = {32, 32}
 	ly_node_insert(root, root_nav)
 
 	root_content := new(Ly_Node, context.temp_allocator)
 	root_content.style.flow = .Col
 	root_content.style.size = {nil, nil}
-	root_content.style.padding = {32, 32, 32, 32}
+	root_content.style.padding = {32, 32}
 	root_content.style.gap = 8
 	ly_node_insert(root, root_content)
 
@@ -389,7 +393,6 @@ test_custom_navbar :: proc(t: ^testing.T) {
 	yoga_validate(t, yoga_tree(root), {1920, 1080})
 }
 
-
 // Custom (not from Yoga repo).
 @(test)
 test_custom_padding_edge :: proc(t: ^testing.T) {
@@ -400,11 +403,122 @@ test_custom_padding_edge :: proc(t: ^testing.T) {
 	root_child0.style.size = {256, 256}
 	ly_node_insert(root, root_child0)
 
-	for axis in 0 ..< 4 {
-		root.style.padding[axis] = 32
-		defer root.style.padding[axis] = 0
+	for &axis in root.style.padding_flat[:] {
+		axis = 32
+		defer axis = 0
 
 		ly_compute_flexbox_layout(root, {1920, 1080})
 		yoga_validate(t, yoga_tree(root), {1920, 1080})
+	}
+}
+
+// Custom (not from Yoga repo).
+@(test)
+test_custom_padding_edge_weirder :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.gap = 8
+	root.style.size = {0.5, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {64, 46}
+	ly_node_insert(root, root_child1)
+
+	for &axis in root.style.padding_flat[:] {
+		axis = 32
+		defer axis = 0
+
+		ly_compute_flexbox_layout(root, {1920, 1080})
+		yoga_validate(t, yoga_tree(root), {1920, 1080})
+	}
+}
+
+// Custom (not from Yoga repo).
+@(test)
+test_custom_margin_edge :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.size = {0.5, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	for &axis in root_child0.style.margin_flat[:] {
+		axis = 32
+		defer axis = 0
+
+		ly_compute_flexbox_layout(root, {1920, 1080})
+		yoga_validate(t, yoga_tree(root), {1920, 1080})
+	}
+}
+
+// Custom (not from Yoga repo).
+@(test)
+test_custom_margin_edge_weirder :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.gap = 8
+	root.style.size = {0.5, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {64, 46}
+	ly_node_insert(root, root_child1)
+
+	for &axis in root_child0.style.margin_flat[:] {
+		axis = 32
+		defer axis = 0
+		for &axis in root_child1.style.margin_flat[:] {
+			axis = 32
+			defer axis = 0
+
+			ly_compute_flexbox_layout(root, {1920, 1080})
+			yoga_validate(t, yoga_tree(root), {1920, 1080})
+		}
+	}
+}
+
+// Custom (not from Yoga repo).
+@(test)
+test_custom_margin_padding :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.gap = 8
+	root.style.size = {0.5, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {64, 46}
+	ly_node_insert(root, root_child1)
+
+	tree := yoga_tree(root)
+
+	// Use prime numbers to avoid false positives if the implementation
+	// were to swap the dimensions, multiply by 2, etc.
+	for &axis in root_child0.style.margin_flat[:] {
+		axis = 13
+		defer axis = 0
+		for &axis in root_child1.style.margin_flat[:] {
+			axis = 17
+			defer axis = 0
+			for &axis in root_child0.style.padding_flat[:] {
+				axis = 19
+				defer axis = 0
+				for &axis in root_child1.style.padding_flat[:] {
+					axis = 23
+					defer axis = 0
+
+					ly_compute_flexbox_layout(root, {1920, 1080})
+					yoga_validate(t, tree, {1920, 1080})
+				}
+			}
+		}
 	}
 }

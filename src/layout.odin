@@ -48,8 +48,16 @@ Ly_Measure_Func :: #type proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32
 Ly_Constants :: struct {
 	size:            [2]Ly_Dim,
 	measure_func:    Ly_Measure_Func,
-	margin:          [4]i32,
-	padding:         [4]i32,
+	using _:         struct #raw_union {
+		// Left, right, top, bottom.
+		margin:      [2][2]i32,
+		margin_flat: [4]i32,
+	},
+	using _:         struct #raw_union {
+		// Left, right, top, bottom.
+		padding:      [2][2]i32,
+		padding_flat: [4]i32,
+	},
 	justify_content: Ly_Justify,
 	align_items:     Ly_Align,
 	gap:             i32,
@@ -58,9 +66,8 @@ Ly_Constants :: struct {
 }
 
 Ly_Output :: struct {
-	pos:   [2]i32,
-	size:  [2]i32,
-	inner: [2]i32,
+	pos:                [2]i32,
+	outer, size, inner: [2]i32,
 }
 
 Ly_Node :: struct {
@@ -114,70 +121,80 @@ ly_evaluate_length :: proc(dim: Ly_Dim, available: Ly_Length) -> (length: Ly_Len
 }
 
 ly_available_inner :: proc(style: Ly_Constants, available: [2]Ly_Length) -> (out: [2]Ly_Length) #no_bounds_check {
+	inset: [2]i32 = {
+		style.margin[0][0] + style.margin[0][1] + style.padding[0][0] + style.padding[0][1],
+		style.margin[1][0] + style.margin[1][1] + style.padding[1][0] + style.padding[1][1],
+	}
+
 	if value, ok := ly_evaluate_length(style.size[0], available[0]).?; ok {
-		out[0] = value - (style.margin[0] + style.padding[0]) * 2
+		out[0] = value - inset[0]
 	} else {
+		// 9.2.2:
+		// "otherwise, subtract the flex container’s margin, border, and padding from the space	
+		// available to the flex container in that dimension and use that value".
 		if value, ok := available[0].?; ok {
-			// 9.2.2:
-			// "otherwise, subtract the flex container’s margin, border, and padding from the space	
-			// available to the flex container in that dimension and use that value".
-			out[0] = value - (style.margin[0] + style.padding[0]) * 2
+			out[0] = value - inset[0]
 		}
 	}
 	if value, ok := ly_evaluate_length(style.size[1], available[1]).?; ok {
-		out[1] = value - (style.margin[1] + style.padding[1]) * 2
+		out[1] = value - inset[1]
 	} else {
+		// 9.2.2:
+		// "otherwise, subtract the flex container’s margin, border, and padding from the space	
+		// available to the flex container in that dimension and use that value".
 		if value, ok := available[1].?; ok {
-			// 9.2.2:
-			// "otherwise, subtract the flex container’s margin, border, and padding from the space	
-			// available to the flex container in that dimension and use that value".
-			out[1] = value - (style.margin[1] + style.padding[1]) * 2
+			out[1] = value - inset[1]
 		}
 	}
+
 	return
 }
 
 ly_outer :: proc(style: Ly_Constants, available: [2]Ly_Length, content: [2]i32) -> (out: [2]i32) #no_bounds_check {
-	return {
-		ly_evaluate_length(style.size[0], available[0]).? or_else (content[0] + style.padding[0] * 2),
-		ly_evaluate_length(style.size[1], available[1]).? or_else (content[1] + style.padding[1] * 2),
-	}
+	return ly_box(style, available, content) + {style.margin[0][0] + style.margin[0][1], style.margin[1][0] + style.margin[1][1]}
 }
 
 ly_inner :: proc(style: Ly_Constants, available: [2]Ly_Length, content: [2]i32) -> (out: [2]i32) #no_bounds_check {
+	inset: [2]i32 = {style.padding[0][0] + style.padding[0][1], style.padding[1][0] + style.padding[1][1]}
+
 	if value, ok := ly_evaluate_length(style.size[0], available[0]).?; ok {
-		out[0] = value - (style.margin[0] + style.padding[0]) * 2
+		out[0] = value - inset[0]
 	} else {
 		out[0] = content[0]
 	}
 	if value, ok := ly_evaluate_length(style.size[1], available[1]).?; ok {
-		out[1] = value - (style.margin[0] + style.padding[0]) * 2
+		out[1] = value - inset[1]
 	} else {
 		out[1] = content[1]
 	}
 	return
 }
 
+ly_box :: proc(style: Ly_Constants, available: [2]Ly_Length, content: [2]i32) -> (out: [2]i32) #no_bounds_check {
+	return {
+		(ly_evaluate_length(style.size[0], available[0]).? or_else (content[0] + style.padding[0][0] + style.padding[0][1])),
+		(ly_evaluate_length(style.size[1], available[1]).? or_else (content[1] + style.padding[1][0] + style.padding[1][1])),
+	}
+}
+
 ly_position_flexbox :: proc(node: ^Ly_Node) {
-	// available_inner := ly_available_inner(node.style, {node.measure.size.x, node.measure.size.y})
-	available_inner := node.measure.inner
 	mx := node.style.flow
 	cx: Ly_Axis_Flex = node.style.flow == .Row ? .Col : .Row
 
 	flex_line: i32
 	for child := node.first; child != nil; child = child.next {
-		defer flex_line += child.measure.size[int(mx)]
+		defer flex_line += child.measure.outer[int(mx)]
 		defer flex_line += node.style.gap
 
-		child.measure.pos[0] = node.measure.pos[0] + node.style.padding[0]
-		child.measure.pos[1] = node.measure.pos[1] + node.style.padding[1]
+		child.measure.pos[0] = node.measure.pos[0] + node.style.padding[0][0] + child.style.margin[0][0]
+		child.measure.pos[1] = node.measure.pos[1] + node.style.padding[1][0] + child.style.margin[1][0]
 
 		child.measure.pos[int(mx)] += flex_line
 	}
 
 	switch node.style.align_items {
 	case .Stretch:
-		cross_size := available_inner[int(cx)]
+		cross_size := node.measure.inner[int(cx)]
 		for child := node.first; child != nil; child = child.next {
 			if child.style.size[int(cx)] == nil {
 				diff := (cross_size - child.measure.size[int(cx)])
@@ -188,12 +205,12 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 	case .FlexStart:
 	case .FlexEnd:
 		for child := node.first; child != nil; child = child.next {
-			off := available_inner[int(cx)] - child.measure.size[int(cx)]
+			off := node.measure.inner[int(cx)] - child.measure.size[int(cx)]
 			child.measure.pos[int(cx)] += off
 		}
 	case .Center:
 		for child := node.first; child != nil; child = child.next {
-			off := available_inner[int(cx)] - child.measure.size[int(cx)]
+			off := node.measure.inner[int(cx)] - child.measure.size[int(cx)]
 			child.measure.pos[int(cx)] += off / 2
 		}
 	case .Baseline:
@@ -208,9 +225,12 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
 	if node.style.measure_func != nil {
 		// TODO: Kind of a hack to resume typical layout flow after measuring.
-		outer_size := node.style.measure_func(node, available)
-		node.measure.size = {outer_size.x, outer_size.y}
-		node.measure.inner = node.measure.inner
+		box_size := node.style.measure_func(node, available)
+
+		node.measure.size = box_size
+		node.measure.inner = box_size - {node.style.padding[0][0] + node.style.padding[0][1], node.style.padding[1][0] + node.style.padding[1][1]}
+		node.measure.outer = box_size + {node.style.margin[0][0] + node.style.margin[0][1], node.style.margin[1][0] + node.style.margin[1][1]}
+
 		return node.measure.size
 	}
 
@@ -228,8 +248,8 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 			(child.style.grow == false) or_continue
 
 			ly_compute_flexbox_layout(child, available_inner)
-			content[int(mx)] += child.measure.size[int(mx)]
-			content[int(cx)] = max(content[cx], child.measure.size[int(cx)])
+			content[int(mx)] += child.measure.outer[int(mx)]
+			content[int(cx)] = max(content[cx], child.measure.outer[int(cx)])
 		}
 
 		content[i32(mx)] += node.style.gap * max(0, child_count - 1)
@@ -251,8 +271,9 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 		}
 	}
 
-	node.measure.size = ly_outer(node.style, available, content)
+	node.measure.size = ly_box(node.style, available, content)
 	node.measure.inner = ly_inner(node.style, available, content)
+	node.measure.outer = ly_outer(node.style, available, content)
 
 	ly_position_flexbox(node)
 
