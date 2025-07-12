@@ -132,6 +132,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 	case:
 		// Node is stale, break continuity.
 		text_state_destroy(&node.text)
+		im_widget_dyn_destroy(node.wrapper)
 		node^ = {}
 	}
 
@@ -187,22 +188,17 @@ im_recurse :: proc(root: ^Im_Node, available: [2]i32) {
 }
 
 // TODO: Ideally this is template-ised on the "mouse_ok" param.
-im_hot :: proc(state: ^Im_State, mouse: Maybe([2]i32), dt: f32) {
+im_hot :: proc(measure: Ly_Output, hot: ^f32, mouse: Maybe([2]i32), dt: f32) {
 	mouse, mouse_ok := mouse.?
 
-	for _, &node in state.cache {
-		in_bounds: bool
-
-		#no_bounds_check if mouse_ok {
-			measure := node.ly.measure
-
-			into := mouse - measure.pos
-			size := measure.size
-			in_bounds = into.x >= 0 && into.x < size.x && into.y >= 0 && into.y < size.y
-		}
-
-		node.hot = exp_decay(node.hot, in_bounds ? 1 : 0, 28, dt)
+	in_bounds: bool
+	#no_bounds_check if mouse_ok {
+		into := mouse - measure.pos
+		size := measure.size
+		in_bounds = into.x >= 0 && into.x < size.x && into.y >= 0 && into.y < size.y
 	}
+
+	hot^ = exp_decay(hot^, in_bounds ? 1 : 0, 28, dt)
 }
 
 im_dump :: proc(node: ^Im_Node, allocator := context.temp_allocator) -> string {

@@ -46,26 +46,27 @@ handle_char_input :: proc(box: ^text_edit.State, codepoint: rune) {
 }
 
 // Textbox.
-Im_Widget_Textbox :: struct {
-	box:          text_edit.State,
-	builder:      strings.Builder,
-	hit:          Maybe(d2w.DWRITE_HIT_TEST_METRICS),
-	trailing_hit: win.BOOL,
+Im_Widget_Textbox :: struct #no_copy {
+	box:                     text_edit.State,
+	builder:                 strings.Builder,
+	hit:                     Maybe(d2w.DWRITE_HIT_TEST_METRICS),
+	trailing_hit, is_inside: win.BOOL,
+	hot:                     f32,
 }
 im_widget_textbox_create :: proc(state: ^Im_State, w: ^Im_Widget_Textbox) {
 	w.builder = strings.builder_make(state.allocator)
 
-	// TODO: We can't use "text_edit.setup_once" because it uses a pointer, and widgets can move in memory.
+	// Note "text_edit.setup_once" sets a pointer.
+	// We can't allow widgets to relocate in memory.
 	text_edit.init(&w.box, state.allocator, state.allocator)
-	// text_edit.setup_once(&w.box, &w.builder)
+	text_edit.setup_once(&w.box, &w.builder)
 }
 im_widget_textbox_destroy :: proc(w: ^Im_Widget_Textbox) {
 	text_edit.destroy(&w.box)
 	strings.builder_destroy(&w.builder)
 }
-im_widget_textbox_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Textbox) {
+im_widget_textbox_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Textbox, dt: f32) {
 	text_edit.update_time(&wg.box)
-	wg.box.builder = &wg.builder
 
 	it: int
 	for v in wind_events_next(&it, nil) {
@@ -75,29 +76,28 @@ im_widget_textbox_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, w
 			handle_char_input(&wg.box, inner)
 		case In_Click:
 			(inner.down && inner.button == .Left) or_continue
-
 			layout := text_state_get_valid_layout(&node.text) or_continue
 
-			trailing_hit, is_inside: win.BOOL
 			metrics: d2w.DWRITE_HIT_TEST_METRICS
-			hr := layout->HitTestPoint(f32(inner.pos.x - node.measure.pos.x), f32(inner.pos.y - node.measure.pos.y), &trailing_hit, &is_inside, &metrics)
+			hr := layout->HitTestPoint(f32(inner.pos.x - node.measure.pos.x), f32(inner.pos.y - node.measure.pos.y), &wg.trailing_hit, &wg.is_inside, &metrics)
 			win.SUCCEEDED(hr) or_continue
-
-			wg.hit = metrics
-			wg.trailing_hit = trailing_hit
-			// wg.box.selection = {int(metrics.textPosition), int(metrics.textPosition)}
-			// wg.foo = metrics.textPosition
 			defer wind_events_pop(&it)
 
-			new_loc := int(metrics.textPosition + (wg.trailing_hit ? 1 : 0))
-			wg.box.selection = {new_loc, new_loc}
+			wg.hit = metrics
+
+			blip_loc := metrics.textPosition + (wg.trailing_hit ? 1 : 0)
+			wg.box.selection = {int(blip_loc), int(blip_loc)}
 		}
 
 	}
 
+	im_hot(node.measure, &wg.hot, w.mouse, dt)
+
+	node.color = {0, 0, wg.hot, 1}
+
 	str := strings.to_string(wg.builder)
 	if len(str) > 0 {
-		text_state_hydrate(&node.text, Text_Desc{.Body, .THIN, .ITALIC, 128, str})
+		text_state_hydrate(&node.text, Text_Desc{.Body, .THIN, .ITALIC, 96, str})
 	}
 }
 im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: Render) {
@@ -141,9 +141,11 @@ im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: R
 		}
 
 		if hit, ok := wg.hit.?; ok {
+			blip_loc := hit.textPosition + (wg.trailing_hit ? 1 : 0)
+
 			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)}
 			metrics: d2w.DWRITE_HIT_TEST_METRICS
-			hr := layout->HitTestTextPosition(hit.textPosition + (wg.trailing_hit ? 1 : 0), wg.trailing_hit, &pos[0], &pos[1], &metrics)
+			hr := layout->HitTestTextPosition(blip_loc, wg.trailing_hit, &pos[0], &pos[1], &metrics)
 			win.SUCCEEDED(hr) or_break select
 
 			render.brush->SetColor(auto_cast &{0, 1, 0, 1})
@@ -164,7 +166,7 @@ im_widget_button_create :: proc(state: ^Im_State, w: ^Im_Widget_Button) {
 }
 im_widget_button_destroy :: proc(w: ^Im_Widget_Button) {
 }
-im_widget_button_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Button) {
+im_widget_button_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Button, dt: f32) {
 }
 
 im_widget_create :: proc {
@@ -224,7 +226,7 @@ im_widget_dyn_draw :: proc(node: ^Im_Node, p: Im_Wrapper, r: Render) {
 	}
 }
 
-im_widget_hydrate :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, $T: typeid) -> (out: ^T) {
+im_widget_hydrate :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, $T: typeid, dt: f32) -> (out: ^T) {
 	existing := node.wrapper
 	existing_t, existing_p := im_widget_dyn_type(existing)
 	has_existing := existing != nil
@@ -242,7 +244,7 @@ im_widget_hydrate :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, $T: type
 		out = cast(^T)existing_p
 	}
 
-	im_widget_update(w, state, node, out)
+	im_widget_update(w, state, node, out, dt)
 
 	return
 }

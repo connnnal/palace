@@ -12,6 +12,7 @@ import "core:text/match"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
+import "lib:superluminal"
 
 Render :: struct {
 	render_target: ^d2w.ID2D1RenderTarget,
@@ -20,6 +21,8 @@ Render :: struct {
 }
 
 render_setup :: proc(r: ^Render, rt: ^d2w.ID2D1RenderTarget) {
+	superluminal.InstrumentationScope("Rt Resources", color = superluminal.MAKE_COLOR(255, 0, 255))
+
 	rt->AddRef()
 	r.render_target = rt
 
@@ -79,6 +82,8 @@ p: [Palette][4]f32 = {
 main :: proc() {
 	context = default_context()
 
+	superluminal.InstrumentationScope("Main", color = superluminal.MAKE_COLOR(0, 255, 0))
+
 	w: Window
 	w.update_callback = update_callback
 	w.paint_callback = paint_callback
@@ -89,6 +94,8 @@ main :: proc() {
 	defer render_reset(&render)
 
 	update_callback :: proc(w: ^Window, area: [2]i32, dt: f32) {
+		superluminal.InstrumentationScope("Update", color = superluminal.MAKE_COLOR(0, 0, 255))
+
 		// Note that we avoid guarding the temporary allocator here.
 		// We may want to reference allocated memory in the paint callback.
 		defer frame += 1
@@ -118,9 +125,9 @@ main :: proc() {
 						// }
 						node := im_leaf(id("foo4"), {color = p[.Content], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "default text"}})
 						if true || frame % 60 > 30 {
-							_ = im_widget_hydrate(w, &w.im, node, Im_Widget_Textbox)
+							_ = im_widget_hydrate(w, &w.im, node, Im_Widget_Textbox, dt)
 						} else {
-							_ = im_widget_hydrate(w, &w.im, node, Im_Widget_Button)
+							_ = im_widget_hydrate(w, &w.im, node, Im_Widget_Button, dt)
 						}
 						im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
 						im_leaf(id("foo3"), {color = p[.Midground], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
@@ -141,7 +148,6 @@ main :: proc() {
 		if area.x > 0 && area.y > 0 {
 			im_recurse(root, area)
 		}
-		im_hot(&w.im, w.mouse, dt)
 
 		clear(&w.im.draws)
 		im_state_draws(&w.im, root)
@@ -153,6 +159,8 @@ main :: proc() {
 		}
 	}
 	paint_callback :: proc(w: ^Window, recreate: bool) {
+		superluminal.InstrumentationScope("Paint", color = superluminal.MAKE_COLOR(255, 0, 0))
+
 		// There is no subesquent step after this, it's safe to guard the allocator.
 		// Ideal as this callback can re-run per "frame".
 		runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
