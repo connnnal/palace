@@ -56,6 +56,7 @@ Im_State :: struct #no_copy {
 	frame:     Frame,
 	draws:     [dynamic]^Im_Node,
 	nodes:     va.Virtual_Array(Im_Node),
+	widgets:   va.Virtual_Array(Im_Wrapper_Anon),
 }
 
 im_state_init :: proc(state: ^Im_State, allocator := context.allocator) {
@@ -69,6 +70,7 @@ im_state_destroy :: proc(state: ^Im_State) {
 	delete(state.cache)
 	delete(state.draws)
 	va.destroy(&state.nodes)
+	va.destroy(&state.widgets)
 }
 
 Im_Decor :: struct {

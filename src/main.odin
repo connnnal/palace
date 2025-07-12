@@ -105,22 +105,22 @@ main :: proc() {
 				}
 				if root := im_scope(id("content"), {flow = .Row, gap = 32, padding = 32, color = p[.Background]}); true {
 					if root := im_scope(id("sidebar"), {flow = .Col, gap = 8, padding = 32, size = {500, nil}, color = p[.Foreground]}); true {
-						for i in 0 ..< 4_000 {
-							(frame % 20 > 10) or_break
-							node := im_leaf(
-								id("child", i),
-								{
-									size = {32, 32},
-									color = p[.Content],
-									text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + i32((frame + i) % 4), fmt.tprintf("hi!!! %v", frame)},
-								},
-							)
-						}
+						// for i in 0 ..< 4_000 {
+						// 	(frame % 20 > 10) or_break
+						// 	node := im_leaf(
+						// 		id("child", i),
+						// 		{
+						// 			size = {32, 32},
+						// 			color = p[.Content],
+						// 			text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 16 + i32((frame + i) % 4), fmt.tprintf("hi!!! %v", frame)},
+						// 		},
+						// 	)
+						// }
 						node := im_leaf(id("foo4"), {color = p[.Content], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "default text"}})
 						if true || frame % 60 > 30 {
-							_ = im_widget_hydrate(&w.im, node, Im_Widget_Textbox)
+							_ = im_widget_hydrate(w, &w.im, node, Im_Widget_Textbox)
 						} else {
-							_ = im_widget_hydrate(&w.im, node, Im_Widget_Button)
+							_ = im_widget_hydrate(w, &w.im, node, Im_Widget_Button)
 						}
 						im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
 						im_leaf(id("foo3"), {color = p[.Midground], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
@@ -173,7 +173,7 @@ main :: proc() {
 				w.render_target->FillRectangle(&rect, render.brush)
 			}
 
-			im_widget_draw(&w.im, v, render)
+			im_widget_dyn_draw(v, v.wrapper, render)
 
 			layout := text_state_get_valid_layout(&v.text) or_continue
 

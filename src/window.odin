@@ -36,6 +36,7 @@ In_Button :: enum {
 In_Click :: struct {
 	down:   bool,
 	button: In_Button,
+	pos:    [2]i32,
 }
 
 In_Event :: struct {
@@ -131,7 +132,8 @@ wind_init :: proc "contextless" () {
 				click.button = .Right
 			}
 
-			this.mouse = [2]i32{win.GET_X_LPARAM(lparam), win.GET_Y_LPARAM(lparam)}
+			click.pos = [2]i32{win.GET_X_LPARAM(lparam), win.GET_Y_LPARAM(lparam)}
+			this.mouse = click.pos
 			append(&wind_state.events, In_Event{this, this.modifiers, click})
 		case win.WM_MOUSELEAVE:
 			this.mouse = nil

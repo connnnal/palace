@@ -8,41 +8,7 @@ import text_edit "core:text/edit"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
-
-Im_Widget_Textbox :: struct {
-	destroy: proc(w: ^Im_Widget_Textbox),
-	draw:    proc(state: ^Im_State, node: ^Im_Node, w: ^Im_Widget_Textbox, r: Render),
-	box:     text_edit.State,
-	builder: strings.Builder,
-}
-
-Im_Widget_Button :: struct {
-	destroy: proc(w: ^Im_Widget_Button),
-	draw:    proc(state: ^Im_State, node: ^Im_Node, w: ^Im_Widget_Button, r: Render),
-	click:   bool,
-}
-
-// WIDGET_SIZE :: max(size_of(Im_Widget_Textbox), size_of(Im_Widget_Button))
-WIDGET_SIZE :: 272
-
-// We don't know the inner type of our widget, use worst-case alignment.
-// Could fallback to "runtime.DEFAULT_ALIGNMENT".
-WIDGET_ALIGN :: max(align_of(Im_Widget_Textbox), align_of(Im_Widget_Button))
-#assert(WIDGET_ALIGN < runtime.DEFAULT_ALIGNMENT, "widget alignment fell back to worst case")
-
-Im_Wrapper :: struct {
-	using _: struct #raw_union #align (WIDGET_ALIGN) {
-		using _: struct {
-			destroy: proc(w: rawptr),
-			draw:    proc(state: ^Im_State, node: ^Im_Node, w: rawptr, r: Render),
-		},
-		buf:     [WIDGET_SIZE]u8,
-	},
-	// TODO: Do we need a maybe? Likely typeid '0' is reserved for nil?
-	inner:   typeid,
-}
-
-// Textbox
+import va "lib:virtual_array"
 
 handle_char_input :: proc(box: ^text_edit.State, codepoint: rune) {
 	switch codepoint {
@@ -79,10 +45,14 @@ handle_char_input :: proc(box: ^text_edit.State, codepoint: rune) {
 	}
 }
 
+// Textbox.
+Im_Widget_Textbox :: struct {
+	box:          text_edit.State,
+	builder:      strings.Builder,
+	hit:          Maybe(d2w.DWRITE_HIT_TEST_METRICS),
+	trailing_hit: win.BOOL,
+}
 im_widget_textbox_create :: proc(state: ^Im_State, w: ^Im_Widget_Textbox) {
-	w.destroy = im_widget_destroy
-	w.draw = im_widget_textbox_draw
-
 	w.builder = strings.builder_make(state.allocator)
 
 	// TODO: We can't use "text_edit.setup_once" because it uses a pointer, and widgets can move in memory.
@@ -93,34 +63,55 @@ im_widget_textbox_destroy :: proc(w: ^Im_Widget_Textbox) {
 	text_edit.destroy(&w.box)
 	strings.builder_destroy(&w.builder)
 }
-im_widget_textbox_update :: proc(state: ^Im_State, node: ^Im_Node, w: ^Im_Widget_Textbox) {
-	text_edit.update_time(&w.box)
-	w.box.builder = &w.builder
+im_widget_textbox_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Textbox) {
+	text_edit.update_time(&wg.box)
+	wg.box.builder = &wg.builder
 
 	it: int
 	for v in wind_events_next(&it, nil) {
-		inner := v.value.(rune) or_continue
-		defer wind_events_pop(&it)
+		#partial switch inner in v.value {
+		case rune:
+			defer wind_events_pop(&it)
+			handle_char_input(&wg.box, inner)
+		case In_Click:
+			(inner.down && inner.button == .Left) or_continue
 
-		handle_char_input(&w.box, inner)
+			layout := text_state_get_valid_layout(&node.text) or_continue
+
+			trailing_hit, is_inside: win.BOOL
+			metrics: d2w.DWRITE_HIT_TEST_METRICS
+			hr := layout->HitTestPoint(f32(inner.pos.x - node.measure.pos.x), f32(inner.pos.y - node.measure.pos.y), &trailing_hit, &is_inside, &metrics)
+			win.SUCCEEDED(hr) or_continue
+
+			wg.hit = metrics
+			wg.trailing_hit = trailing_hit
+			// wg.box.selection = {int(metrics.textPosition), int(metrics.textPosition)}
+			// wg.foo = metrics.textPosition
+			defer wind_events_pop(&it)
+
+			new_loc := int(metrics.textPosition + (wg.trailing_hit ? 1 : 0))
+			wg.box.selection = {new_loc, new_loc}
+		}
+
 	}
 
-	str := strings.to_string(w.builder)
+	str := strings.to_string(wg.builder)
 	if len(str) > 0 {
 		text_state_hydrate(&node.text, Text_Desc{.Body, .THIN, .ITALIC, 128, str})
 	}
 }
-im_widget_textbox_draw :: proc(state: ^Im_State, node: ^Im_Node, w: ^Im_Widget_Textbox, render: Render) {
+im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: Render) {
 	select: {
 		layout := text_state_get_valid_layout(&node.text) or_break select
 
-		selection := w.box.selection
+		selection := wg.box.selection
 
+		selection_low, selection_high := text_edit.sorted_selection(&wg.box)
 		hit_test: [8]d2w.DWRITE_HIT_TEST_METRICS
 		hit_test_count: u32
 		hr := layout->HitTestTextRange(
-			u32(selection.y),
-			u32(selection.x),
+			u32(selection_low),
+			u32(selection_high),
 			f32(node.measure.pos.x),
 			f32(node.measure.pos.y),
 			raw_data(&hit_test),
@@ -134,17 +125,46 @@ im_widget_textbox_draw :: proc(state: ^Im_State, node: ^Im_Node, w: ^Im_Widget_T
 			render.brush->SetColor(auto_cast &{1, 0, 1, 1})
 			render.render_target->FillRectangle(&rect, render.brush)
 		}
+
+		if hit, ok := wg.hit.?; ok {
+			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)}
+			metrics: d2w.DWRITE_HIT_TEST_METRICS
+			hr := layout->HitTestTextPosition(hit.textPosition, wg.trailing_hit, &pos[0], &pos[1], &metrics)
+			win.SUCCEEDED(hr) or_break select
+
+			render.brush->SetColor(auto_cast &{1, 1, 0, 1})
+
+			metrics.left += f32(node.measure.pos.x)
+			metrics.top += f32(node.measure.pos.y)
+			rect := d2w.D2D_RECT_F{metrics.left, metrics.top, metrics.left + metrics.width, metrics.top + metrics.height}
+			render.render_target->FillRectangle(&rect, render.brush)
+		}
+
+		if hit, ok := wg.hit.?; ok {
+			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)}
+			metrics: d2w.DWRITE_HIT_TEST_METRICS
+			hr := layout->HitTestTextPosition(hit.textPosition + (wg.trailing_hit ? 1 : 0), wg.trailing_hit, &pos[0], &pos[1], &metrics)
+			win.SUCCEEDED(hr) or_break select
+
+			render.brush->SetColor(auto_cast &{0, 1, 0, 1})
+
+			metrics.left += f32(node.measure.pos.x)
+			metrics.top += f32(node.measure.pos.y)
+			rect := d2w.D2D_RECT_F{metrics.left, metrics.top, metrics.left + 4, metrics.top + metrics.height}
+			render.render_target->FillRectangle(&rect, render.brush)
+		}
 	}
 }
 
-// Button
-
+// Button.
+Im_Widget_Button :: struct {
+	click: bool,
+}
 im_widget_button_create :: proc(state: ^Im_State, w: ^Im_Widget_Button) {
-	w.destroy = im_widget_destroy
 }
 im_widget_button_destroy :: proc(w: ^Im_Widget_Button) {
 }
-im_widget_button_update :: proc(state: ^Im_State, node: ^Im_Node, w: ^Im_Widget_Button) {
+im_widget_button_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Button) {
 }
 
 im_widget_create :: proc {
@@ -159,37 +179,70 @@ im_widget_destroy :: proc {
 	im_widget_textbox_destroy,
 	im_widget_button_destroy,
 }
-
-im_widget_hydrate :: proc(state: ^Im_State, node: ^Im_Node, $T: typeid) -> (out: ^T) where size_of(T) <= WIDGET_SIZE,
-	align_of(T) <= WIDGET_ALIGN,
-	intrinsics.type_has_field(T, "destroy"),
-	intrinsics.type_is_proc(intrinsics.type_field_type(T, "destroy")),
-	intrinsics.type_proc_parameter_count(intrinsics.type_field_type(T, "destroy")) == 1,
-	intrinsics.type_proc_parameter_type(intrinsics.type_field_type(T, "destroy"), 0) == ^T,
-	intrinsics.type_proc_return_count(intrinsics.type_field_type(T, "destroy")) == 0 {
-
-	existing := node.wrapper.inner
-	has_existing := existing != nil
-	out = cast(^T)raw_data(&node.wrapper.buf)
-
-	if has_existing && existing != typeid_of(T) {
-		node.wrapper.destroy(raw_data(&node.wrapper.buf))
-	}
-
-	if !has_existing || existing != typeid_of(T) {
-		node.wrapper.inner = typeid_of(T)
-		value: T
-		im_widget_create(state, &value)
-		out^ = value
-	}
-
-	im_widget_update(state, node, out)
-
-	return
+im_widget_draw :: proc {
+	im_widget_textbox_draw,
 }
 
-im_widget_draw :: proc(state: ^Im_State, node: ^Im_Node, r: Render) {
-	if node.wrapper.inner != nil && node.wrapper.draw != nil {
-		node.wrapper.draw(state, node, raw_data(&node.wrapper.buf), r)
+Im_Wrapper :: union {
+	^Im_Widget_Textbox,
+	^Im_Widget_Button,
+}
+
+// We just need a struct with the max size/alignment for each widget type.
+// Previously I used an untyped buffer with attributes derived from "max(T)".
+// This output bogus values, seemingly because of a compiler bug.
+Im_Wrapper_Anon :: struct #raw_union {
+	_: Im_Widget_Textbox,
+	_: Im_Widget_Button,
+}
+
+// TODO: Replace this if we get a statically typed "union typeid" intrinsic.
+im_widget_dyn_type :: proc(p: Im_Wrapper) -> (typeid, rawptr) {
+	switch v in p {
+	case ^Im_Widget_Textbox:
+		return type_of(v), v
+	case ^Im_Widget_Button:
+		return type_of(v), v
+	case:
+		return nil, nil
 	}
+}
+
+im_widget_dyn_destroy :: proc(p: Im_Wrapper) {
+	switch v in p {
+	case ^Im_Widget_Textbox:
+		im_widget_destroy(v)
+	case ^Im_Widget_Button:
+		im_widget_destroy(v)
+	}
+}
+
+im_widget_dyn_draw :: proc(node: ^Im_Node, p: Im_Wrapper, r: Render) {
+	#partial switch v in p {
+	case ^Im_Widget_Textbox:
+		im_widget_draw(v, node, r)
+	}
+}
+
+im_widget_hydrate :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, $T: typeid) -> (out: ^T) {
+	existing := node.wrapper
+	existing_t, existing_p := im_widget_dyn_type(existing)
+	has_existing := existing != nil
+
+	if has_existing && existing_t != typeid_of(^T) {
+		im_widget_dyn_destroy(existing)
+	}
+	if !has_existing || existing_t != typeid_of(^T) {
+		buf, idx := va.alloc(&state.widgets)
+		out = cast(^T)buf
+
+		node.wrapper = out
+		im_widget_create(state, out)
+	} else {
+		out = cast(^T)existing_p
+	}
+
+	im_widget_update(w, state, node, out)
+
+	return
 }
