@@ -48,16 +48,18 @@ In_Event :: struct {
 }
 
 Window :: struct #no_copy {
-	wnd:            win.HWND,
-	render_target:  ^d2w.ID2D1HwndRenderTarget,
-	paint_callback: proc(w: ^Window, area: [2]i32, dt: f32),
-	area:           [2]i32,
-	im:             Im_State,
-	high_surrogate: win.WCHAR,
-	modifiers:      In_Modifiers,
-	mouse:          Maybe([2]i32),
-	mouse_tracking: win.BOOL,
-	last_paint:     time.Tick,
+	wnd:             win.HWND,
+	render_target:   ^d2w.ID2D1HwndRenderTarget,
+	update_callback: proc(w: ^Window, area: [2]i32, dt: f32),
+	paint_callback:  proc(w: ^Window, recreate: bool),
+	painted_ok:      bool,
+	area:            [2]i32,
+	im:              Im_State,
+	high_surrogate:  win.WCHAR,
+	modifiers:       In_Modifiers,
+	mouse:           Maybe([2]i32),
+	mouse_tracking:  win.BOOL,
+	last_paint:      time.Tick,
 }
 
 @(init)
@@ -147,7 +149,7 @@ wind_init :: proc "contextless" () {
 		case win.WM_PAINT:
 			(this != nil) or_break
 
-			wind_paint(this)
+			wind_step(this)
 
 			return 0
 		case win.WM_CHAR:
@@ -269,6 +271,8 @@ wind_open :: proc(w: ^Window) -> (ok: bool) {
 	)
 	check(hr, "failed to create hwnd render target")
 
+	// TODO: Move this.
+	wind_step(w)
 	win.ShowWindow(w.wnd, win.SW_NORMAL)
 
 	return true
@@ -291,9 +295,8 @@ wind_pump :: proc(w: ^Window) -> (keep_alive: bool = true) {
 	return
 }
 
-wind_paint :: proc(w: ^Window) -> (updated: bool) {
+wind_step :: proc(w: ^Window) -> (updated: bool) {
 	free_all(context.temp_allocator)
-
 	(w.render_target->CheckWindowState() == .NONE) or_return
 
 	dt: f32
@@ -304,7 +307,18 @@ wind_paint :: proc(w: ^Window) -> (updated: bool) {
 	}
 	w.last_paint = now
 
-	w.paint_callback(w, w.area, dt)
+	w.update_callback(w, w.area, dt)
+	for run := true; run; run = !w.painted_ok {
+		w.render_target->BeginDraw()
+		w.paint_callback(w, !w.painted_ok)
+		hr := w.render_target->EndDraw(nil, nil)
+
+		w.painted_ok = win.SUCCEEDED(hr)
+		D2DERR_RECREATE_TARGET :: transmute(win.HRESULT)u32(0x8899000C)
+		if !win.SUCCEEDED(hr) && hr != D2DERR_RECREATE_TARGET {
+			log.error("failed to end draw")
+		}
+	}
 
 	return true
 }
