@@ -48,7 +48,7 @@ IF "%-retail"=="1" (
 IF "%-no-crt%"=="1" (
 	SET app_flags=%app_flags% -no-crt
 )
-IF "%-instrument"=="1" (
+IF "%-instrument%"=="1" (
 	SET app_flags=%app_flags% -define:USE_PERFORMANCEAPI_INSTRUMENTATION=true -extra-linker-flags:"/ignore:4099"
 )
 
