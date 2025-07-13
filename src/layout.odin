@@ -263,7 +263,7 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 	}
 }
 
-ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
+ly_sizing_flexbox :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 	if node.style.measure_func != nil {
 		node.measure.size = node.style.measure_func(node, available)
 		return
@@ -281,7 +281,7 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 
 			(child.style.grow == false) or_continue
 
-			ly_compute_flexbox_layout(child, available_inner)
+			ly_sizing_flexbox(child, available_inner)
 
 			outer := ly_outer(child.style, child.measure.size)
 			content[.Main] += outer[int(mx)]
@@ -301,20 +301,18 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 			available_inner[int(mx)] = Ly_Length(free_mx)
 			child.style.size[int(mx)] = 1.0
 
-			ly_compute_flexbox_layout(child, available_inner)
+			ly_sizing_flexbox(child, available_inner)
 			content[.Main] += child.measure.size[int(mx)]
 			content[.Cross] = max(content[.Cross], child.measure.size[int(cx)])
 		}
 	}
 
-	{
-		// Translate from flow space back into world.
-		content := [2]i32{content[auto_cast mx], content[auto_cast cx]}
-		node.measure.size = ly_box(node.style, available, content)
-		// node.measure.inner = ly_inner(node.style, available, content)
-		// node.measure.outer = ly_outer(node.style, available, content)
-	}
+	// Translate from flow space back into world.
+	node.measure.size = ly_box(node.style, available, {content[mx], content[cx]})
 	node.measure.content = content
+}
 
+ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
+	ly_sizing_flexbox(node, available)
 	ly_position_flexbox(node)
 }
