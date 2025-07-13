@@ -54,24 +54,29 @@ Ly_Align :: enum {
 // It simplifies our logic a little bit.
 Ly_Measure_Func :: #type proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32
 
+#assert(size_of(Ly_Dim) == 8)
+#assert(size_of(Ly_Constants) == 64)
+
 Ly_Constants :: struct {
-	size:            [2]Ly_Dim,
-	measure_func:    Ly_Measure_Func,
-	using _:         struct #raw_union {
+	size:         [2]Ly_Dim,
+	measure_func: Ly_Measure_Func,
+	using _:      struct #raw_union {
 		// Left, right, top, bottom.
 		margin:      [2][2]i32,
 		margin_flat: [4]i32,
 	},
-	using _:         struct #raw_union {
+	using _:      struct #raw_union {
 		// Left, right, top, bottom.
 		padding:      [2][2]i32,
 		padding_flat: [4]i32,
 	},
-	justify_content: Ly_Justify,
-	align_items:     Ly_Align,
-	gap:             i32,
-	flow:            Ly_Flow,
-	grow:            bool,
+	using _:      bit_field u32 {
+		justify_content: Ly_Justify | 4,
+		align_items:     Ly_Align   | 4,
+		gap:             i32        | 8,
+		flow:            Ly_Flow    | 4,
+		grow:            bool       | 1,
+	},
 }
 
 Ly_Output :: struct {
@@ -79,7 +84,7 @@ Ly_Output :: struct {
 	content:   [Ly_Axis]i32,
 }
 
-Ly_Node :: struct {
+Ly_Node :: struct #min_field_align(64) {
 	using connections: struct {
 		parent, first, last, next, prev: ^Ly_Node,
 	},
@@ -103,27 +108,31 @@ ly_node_insert :: #force_inline proc(parent, child: ^Ly_Node) {
 	}
 }
 
-// "nil" means indefinite.
-Ly_Length :: Maybe(i32)
+Ly_Length :: distinct i32
+LY_UNDEFINED :: max(Ly_Length)
+
+ly_length :: #force_inline proc(l: Ly_Length) -> (i32, bool) {
+	return i32(l), l != LY_UNDEFINED
+}
 
 ly_evaluate_length :: proc(dim: Ly_Dim, available: Ly_Length) -> (length: Ly_Length) {
-	available, available_definite := available.?
+	available, available_definite := ly_length(available)
 
 	if available_definite {
 		switch value in dim {
 		case i32:
-			return value
+			return Ly_Length(value)
 		case f32:
-			return i32(f32(available) * value)
+			return Ly_Length(i32(f32(available) * value))
 		case nil:
-			return nil
+			return LY_UNDEFINED
 		}
 	} else {
 		switch value in dim {
 		case i32:
-			return value
+			return Ly_Length(value)
 		case f32, nil:
-			return nil
+			return LY_UNDEFINED
 		}
 	}
 	unreachable()
@@ -135,24 +144,24 @@ ly_available_inner :: proc(style: Ly_Constants, available: [2]Ly_Length) -> (out
 		style.margin[1][0] + style.margin[1][1] + style.padding[1][0] + style.padding[1][1],
 	}
 
-	if value, ok := ly_evaluate_length(style.size[0], available[0]).?; ok {
-		out[0] = value - inset[0]
+	if value, ok := ly_length(ly_evaluate_length(style.size[0], available[0])); ok {
+		out[0] = Ly_Length(value - inset[0])
 	} else {
 		// 9.2.2:
 		// "otherwise, subtract the flex container’s margin, border, and padding from the space	
 		// available to the flex container in that dimension and use that value".
-		if value, ok := available[0].?; ok {
-			out[0] = value - inset[0]
+		if value, ok := ly_length(available[0]); ok {
+			out[0] = Ly_Length(value - inset[0])
 		}
 	}
-	if value, ok := ly_evaluate_length(style.size[1], available[1]).?; ok {
-		out[1] = value - inset[1]
+	if value, ok := ly_length(ly_evaluate_length(style.size[1], available[1])); ok {
+		out[1] = Ly_Length(value - inset[1])
 	} else {
 		// 9.2.2:
 		// "otherwise, subtract the flex container’s margin, border, and padding from the space	
 		// available to the flex container in that dimension and use that value".
-		if value, ok := available[1].?; ok {
-			out[1] = value - inset[1]
+		if value, ok := ly_length(available[1]); ok {
+			out[1] = Ly_Length(value - inset[1])
 		}
 	}
 
@@ -169,8 +178,8 @@ ly_inner :: proc(style: Ly_Constants, box: [2]i32) -> (out: [2]i32) #no_bounds_c
 
 ly_box :: proc(style: Ly_Constants, available: [2]Ly_Length, content: [2]i32) -> (out: [2]i32) #no_bounds_check {
 	return {
-		(ly_evaluate_length(style.size[0], available[0]).? or_else (content[0] + style.padding[0][0] + style.padding[0][1])),
-		(ly_evaluate_length(style.size[1], available[1]).? or_else (content[1] + style.padding[1][0] + style.padding[1][1])),
+		(ly_length(ly_evaluate_length(style.size[0], available[0])) or_else (content[0] + style.padding[0][0] + style.padding[0][1])),
+		(ly_length(ly_evaluate_length(style.size[1], available[1])) or_else (content[1] + style.padding[1][0] + style.padding[1][1])),
 	}
 }
 
@@ -285,14 +294,14 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 		content[.Main] += node.style.gap * max(0, child_count - 1)
 
 		free_mx: i32
-		if available_inner[int(mx)] != nil {
-			free_mx = available_inner[int(mx)].(i32) - content[.Main]
+		if length, ok := ly_length(available_inner[int(mx)]); ok {
+			free_mx = length - content[.Main]
 		}
 
 		for child := node.first; child != nil; child = child.next {
 			(child.style.grow == true) or_continue
 
-			available_inner[int(mx)] = free_mx
+			available_inner[int(mx)] = Ly_Length(free_mx)
 			child.style.size[int(mx)] = 1.0
 
 			ly_compute_flexbox_layout(child, available_inner)

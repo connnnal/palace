@@ -97,7 +97,7 @@ im_frame_end :: proc(state: ^Im_State) {
 	}
 
 	{
-		// If this turns out to be slow, we could never unsize the map and take the memory hit.
+		// This is surprisingly fast.
 		COLOR_IM := superluminal.MAKE_COLOR(255, 120, 0)
 		superluminal.InstrumentationScope("Shrink Im_State Map", color = COLOR_IM)
 		shrink(&state.cache)
@@ -186,7 +186,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 		text_measure :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
 			node := cast(^Im_Node)node
 
-			available := [2]f32{available.x != nil ? f32(available.x.(i32)) : max(f32), available.y != nil ? f32(available.y.(i32)) : max(f32)}
+			available := [2]f32{f32(available.x), f32(available.y)}
 			layout := text_state_cache(&node.text, available)
 
 			// Fear not! DWrite metrics are lazily evaluated.
@@ -222,7 +222,7 @@ im_leafw :: proc(id: Id, style: Im_Props, w: ^Window, $T: typeid) -> (^Im_Node, 
 }
 
 im_recurse :: proc(root: ^Im_Node, available: [2]i32) {
-	ly_compute_flexbox_layout(root, {available.x, available.y})
+	ly_compute_flexbox_layout(root, {Ly_Length(available.x), Ly_Length(available.y)})
 }
 
 // TODO: Ideally this is template-ised on the "mouse_ok" param.

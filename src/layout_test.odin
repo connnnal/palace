@@ -162,7 +162,7 @@ yoga_validate :: proc(t: ^testing.T, node: yoga.Node_Ref, available: [2]Ly_Lengt
 	// Verify position.
 	{
 		conv :: proc(length: Ly_Length) -> f32 {
-			if value, ok := length.?; ok {
+			if value, ok := ly_length(length); ok {
 				return f32(value)
 			} else {
 				// YGUndefined.
@@ -232,8 +232,8 @@ test_auto_width :: proc(t: ^testing.T) {
 	root_child2.style.size = {50, 50}
 	ly_node_insert(root, root_child2)
 
-	ly_compute_flexbox_layout(root, {nil, nil})
-	yoga_validate(t, yoga_tree(root), {nil, nil})
+	ly_compute_flexbox_layout(root, {LY_UNDEFINED, LY_UNDEFINED})
+	yoga_validate(t, yoga_tree(root), {LY_UNDEFINED, LY_UNDEFINED})
 }
 
 @(test)
@@ -254,8 +254,8 @@ test_auto_height :: proc(t: ^testing.T) {
 	root_child2.style.size = {50, 50}
 	ly_node_insert(root, root_child2)
 
-	ly_compute_flexbox_layout(root, {nil, nil})
-	yoga_validate(t, yoga_tree(root), {nil, nil})
+	ly_compute_flexbox_layout(root, {LY_UNDEFINED, LY_UNDEFINED})
+	yoga_validate(t, yoga_tree(root), {LY_UNDEFINED, LY_UNDEFINED})
 }
 
 @(test)
@@ -276,8 +276,8 @@ test_flex_direction_column_no_height :: proc(t: ^testing.T) {
 	root_child2.style.size = {nil, 10}
 	ly_node_insert(root, root_child2)
 
-	ly_compute_flexbox_layout(root, {nil, nil})
-	yoga_validate(t, yoga_tree(root), {nil, nil})
+	ly_compute_flexbox_layout(root, {LY_UNDEFINED, LY_UNDEFINED})
+	yoga_validate(t, yoga_tree(root), {LY_UNDEFINED, LY_UNDEFINED})
 }
 
 @(test)
@@ -298,8 +298,8 @@ test_flex_direction_column :: proc(t: ^testing.T) {
 	root_child2.style.size = {nil, 10}
 	ly_node_insert(root, root_child2)
 
-	ly_compute_flexbox_layout(root, {nil, nil})
-	yoga_validate(t, yoga_tree(root), {nil, nil})
+	ly_compute_flexbox_layout(root, {LY_UNDEFINED, LY_UNDEFINED})
+	yoga_validate(t, yoga_tree(root), {LY_UNDEFINED, LY_UNDEFINED})
 }
 
 @(test)
@@ -320,8 +320,8 @@ test_flex_direction_row :: proc(t: ^testing.T) {
 	root_child2.style.size = {10, nil}
 	ly_node_insert(root, root_child2)
 
-	ly_compute_flexbox_layout(root, {nil, nil})
-	yoga_validate(t, yoga_tree(root), {nil, nil})
+	ly_compute_flexbox_layout(root, {LY_UNDEFINED, LY_UNDEFINED})
+	yoga_validate(t, yoga_tree(root), {LY_UNDEFINED, LY_UNDEFINED})
 }
 
 @(test)
@@ -330,8 +330,8 @@ test_padding_no_size :: proc(t: ^testing.T) {
 	root.style.flow = .Col
 	root.style.padding = {10, 10}
 
-	ly_compute_flexbox_layout(root, {nil, nil})
-	yoga_validate(t, yoga_tree(root), {nil, nil})
+	ly_compute_flexbox_layout(root, {LY_UNDEFINED, LY_UNDEFINED})
+	yoga_validate(t, yoga_tree(root), {LY_UNDEFINED, LY_UNDEFINED})
 }
 
 @(test)
@@ -344,8 +344,8 @@ test_padding_container_match_child :: proc(t: ^testing.T) {
 	root_child0.style.size = {10, 10}
 	ly_node_insert(root, root_child0)
 
-	ly_compute_flexbox_layout(root, {nil, nil})
-	yoga_validate(t, yoga_tree(root), {nil, nil})
+	ly_compute_flexbox_layout(root, {LY_UNDEFINED, LY_UNDEFINED})
+	yoga_validate(t, yoga_tree(root), {LY_UNDEFINED, LY_UNDEFINED})
 }
 
 // Custom (not from Yoga repo).
