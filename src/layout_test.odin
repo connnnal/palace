@@ -105,8 +105,6 @@ yoga_style :: proc(node: yoga.Node_Ref, style: Ly_Constants) {
 			align = .FlexEnd
 		case .Center:
 			align = .Center
-		case .Baseline:
-			align = .Baseline
 		}
 		yoga.NodeStyleSetAlignItems(node, align)
 	}
@@ -120,10 +118,6 @@ yoga_style :: proc(node: yoga.Node_Ref, style: Ly_Constants) {
 			justify = .FlexEnd
 		case .Center:
 			justify = .Center
-		case .SpaceBetween:
-			justify = .SpaceBetween
-		case .SpaceAround:
-			justify = .SpaceAround
 		}
 		yoga.NodeStyleSetJustifyContent(node, justify)
 	}
@@ -517,6 +511,52 @@ test_custom_margin_padding :: proc(t: ^testing.T) {
 
 					ly_compute_flexbox_layout(root, {1920, 1080})
 					yoga_validate(t, tree, {1920, 1080})
+				}
+			}
+		}
+	}
+}
+
+// Custom (not from Yoga repo).
+@(test)
+test_custom_margin_padding_align :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.gap = 8
+	root.style.size = {0.5, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {64, 46}
+	ly_node_insert(root, root_child1)
+
+	tree := yoga_tree(root)
+
+	for &axis in root_child0.style.margin_flat[:] {
+		axis = 32
+		defer axis = 0
+		for &axis in root_child1.style.margin_flat[:] {
+			axis = 16
+			defer axis = 0
+			for &axis in root_child0.style.padding_flat[:] {
+				axis = 8
+				defer axis = 0
+				for &axis in root_child1.style.padding_flat[:] {
+					axis = 4
+					defer axis = 0
+
+					for align_items in Ly_Align {
+						root.style.align_items = align_items
+						for justify_content in Ly_Justify {
+							root.style.justify_content = justify_content
+
+							root.style.justify_content = .Center
+							ly_compute_flexbox_layout(root, {1920, 1080})
+							yoga_validate(t, tree, {1920, 1080})
+						}
+					}
 				}
 			}
 		}

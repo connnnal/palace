@@ -164,7 +164,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 		node := value_ptr^
 		node.id = id
 	} else {
-		// Retain state, but we need to clear connections to the other (potentially invalid) nodes.
+		// Retain state, but we must clear connections to other (potentially invalid) nodes.
 		node := value_ptr^
 		log.assertf(node.frame < im_state.frame, "hash collision %v", id)
 		log.assertf(node.frame == im_state.frame - 1, "stale node %v", id)
