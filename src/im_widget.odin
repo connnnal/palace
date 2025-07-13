@@ -82,67 +82,83 @@ handle_key_input :: proc(box: ^text_edit.State, key: u32, modifiers: In_Modifier
 Im_Widget_Textbox :: struct #no_copy {
 	box:                     text_edit.State,
 	builder:                 strings.Builder,
-	hit:                     Maybe(d2w.DWRITE_HIT_TEST_METRICS),
 	trailing_hit, is_inside: win.BOOL,
-	text:                    Maybe(Text_Layout_State),
+	text:                    Text_Layout_State,
 	hot:                     f32,
 }
-im_widget_textbox_create :: proc(state: ^Im_State, w: ^Im_Widget_Textbox) {
-	w.builder = strings.builder_make(state.allocator)
+im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widget_Textbox {
+	this, is_new := im_widget_replace(node, Im_Widget_Textbox)
 
-	// Note "text_edit.setup_once" sets a pointer.
-	// We can't allow widgets to relocate in memory.
-	text_edit.init(&w.box, state.allocator, state.allocator)
-	text_edit.setup_once(&w.box, &w.builder)
-}
-im_widget_textbox_destroy :: proc(w: ^Im_Widget_Textbox) {
-	text_edit.destroy(&w.box)
-	strings.builder_destroy(&w.builder)
-	text_state_destroy(&w.text)
-}
-im_widget_textbox_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Textbox, dt: f32) {
-	text_edit.update_time(&wg.box)
+	if is_new {
+		this.builder = strings.builder_make(im_state.allocator)
+
+		// Note "text_edit.setup_once" sets a pointer.
+		// We can't allow widgets to relocate in memory.
+		text_edit.init(&this.box, im_state.allocator, im_state.allocator)
+		text_edit.setup_once(&this.box, &this.builder)
+	}
+
+	text_edit.update_time(&this.box)
 
 	it: int
 	for v in wind_events_next(&it, w) {
 		#partial switch inner in v.value {
 		case u32:
 			defer wind_events_pop(&it)
-			handle_key_input(&wg.box, inner, v.modifiers)
+			handle_key_input(&this.box, inner, v.modifiers)
 		case rune:
 			defer wind_events_pop(&it)
-			handle_char_input(&wg.box, inner)
+			handle_char_input(&this.box, inner)
 		case In_Click:
 			(inner.down && inner.button == .Left) or_continue
-			layout := text_state_get_valid_layout(&wg.text) or_continue
+			layout := text_state_get_valid_layout(&this.text) or_continue
 
 			metrics: d2w.DWRITE_HIT_TEST_METRICS
-			hr := layout->HitTestPoint(f32(inner.pos.x - node.measure.pos.x), f32(inner.pos.y - node.measure.pos.y), &wg.trailing_hit, &wg.is_inside, &metrics)
+			hr := layout->HitTestPoint(f32(inner.pos.x - node.measure.pos.x), f32(inner.pos.y - node.measure.pos.y), &this.trailing_hit, &this.is_inside, &metrics)
 			win.SUCCEEDED(hr) or_continue
 			defer wind_events_pop(&it)
 
-			blip_loc := metrics.textPosition + (wg.trailing_hit ? 1 : 0)
-			wg.box.selection = {int(blip_loc), int(blip_loc)}
+			blip_loc := metrics.textPosition + (this.trailing_hit ? 1 : 0)
+			this.box.selection = {int(blip_loc), int(blip_loc)}
 		}
 	}
 
-	str := strings.to_string(wg.builder)
-	text_state_hydrate(&wg.text, Text_Desc{.Body, .THIN, .ITALIC, 96, str})
+	str := strings.to_string(this.builder)
+	text_state_hydrate(&this.text, Text_Desc{.Body, .THIN, .ITALIC, 96, str})
 	if len(str) > 0 {
-		text_state_cache(&wg.text, {f32(node.measure.size.x), f32(node.measure.size.y)})
+		text_state_cache(&this.text, {f32(node.measure.size.x), f32(node.measure.size.y)})
 	}
 
-	im_hot(node.measure, &wg.hot, w.mouse, dt)
+	im_hot(node.measure, w.mouse, dt, &this.hot)
 
-	node.color = {0, 0, 0.5 + 0.5 * wg.hot, 1}
+	node.style.size = {1.0, 256}
+	node.color = {0, 0, 0.5 + 0.5 * this.hot, 1}
+
+	return this
 }
-im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: Render) {
+im_widget_textbox_destroy :: proc(this: ^Im_Widget_Textbox) {
+	text_edit.destroy(&this.box)
+	strings.builder_destroy(&this.builder)
+	text_state_destroy(&this.text)
+}
+im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Textbox) {
+	im_widget_none_draw(render, node)
+
+	rect := d2w.D2D_RECT_F {
+		f32(node.measure.pos.x),
+		f32(node.measure.pos.y),
+		f32(node.measure.size.x + node.measure.pos.x),
+		f32(node.measure.size.y + node.measure.pos.y),
+	}
+	render.target->PushAxisAlignedClip(&rect, .PER_PRIMITIVE)
+	defer render.target->PopAxisAlignedClip()
+
 	hr: win.HRESULT
 	select: {
-		layout := text_state_get_valid_layout(&wg.text) or_break select
+		layout := text_state_get_valid_layout(&this.text) or_break select
 
-		selection := wg.box.selection
-		selection_low, selection_high := text_edit.sorted_selection(&wg.box)
+		selection := this.box.selection
+		selection_low, selection_high := text_edit.sorted_selection(&this.box)
 
 		// Drag box.
 		if selection_low != selection_high {
@@ -184,27 +200,14 @@ im_widget_textbox_draw :: proc(wg: ^Im_Widget_Textbox, node: ^Im_Node, render: R
 		}
 	}
 
-	str := strings.to_string(wg.builder)
-	layout, layout_ok := text_state_get_valid_layout(&wg.text)
+	str := strings.to_string(this.builder)
+	layout, layout_ok := text_state_get_valid_layout(&this.text)
 	text: if len(str) > 0 && layout_ok {
-		im_widget_none_draw(node, render, false)
-
-		rect := d2w.D2D_RECT_F {
-			f32(node.measure.pos.x),
-			f32(node.measure.pos.y),
-			f32(node.measure.size.x + node.measure.pos.x),
-			f32(node.measure.size.y + node.measure.pos.y),
-		}
-
-		render.target->PushAxisAlignedClip(&rect, .PER_PRIMITIVE)
-
 		point := d2w.D2D_POINT_2F{f32(node.measure.pos.x), f32(node.measure.pos.y)}
-		render.brush->SetColor(auto_cast &p[.Text])
+		render.brush->SetColor(auto_cast &{1, 1, 1, 1})
 		render.target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
-
-		render.target->PopAxisAlignedClip()
 	} else {
-		im_widget_none_draw(node, render, true)
+		im_widget_none_draw(render, node)
 	}
 
 }
@@ -219,9 +222,54 @@ im_widget_button_destroy :: proc(w: ^Im_Widget_Button) {
 }
 im_widget_button_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Button, dt: f32) {
 }
+im_widget_button_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Button) {
+}
+
+// Text.
+Im_Widget_Text :: struct {
+	text: Text_Layout_State,
+}
+im_widget_text_bind :: proc(node: ^Im_Node, desc: Text_Desc) {
+	this, _ := im_widget_replace(node, Im_Widget_Text)
+
+	text_state_hydrate(&this.text, desc)
+
+	node.style.size = {nil, nil}
+	node.style.measure_func = proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
+		node := cast(^Im_Node)node
+		this := node.wrapper.(^Im_Widget_Text)
+
+		available := [2]f32{f32(available.x), f32(available.y)}
+		layout, ok := text_state_cache(&this.text, available)
+		metrics: d2w.DWRITE_TEXT_METRICS
+
+		if ok {
+			// Fear not! DWrite metrics are lazily evaluated.
+			// Updating props can trigger a slow or fast path, depending on their type.
+			// I.e. max dimensions is free; text break sizes from the previous layout control invalidation.
+			hr := layout->GetMetrics(&metrics)
+			check(hr, "failed to get text metrics")
+		}
+
+		return {i32(metrics.width), i32(metrics.height)}
+	}
+}
+im_widget_text_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Text) {
+	// im_widget_none_draw(render, node)
+
+	text: {
+		layout := text_state_get_valid_layout(&this.text) or_break text
+		point := d2w.D2D_POINT_2F{f32(node.measure.pos.x), f32(node.measure.pos.y)}
+		render.brush->SetColor(auto_cast &p[.Text])
+		render.target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
+	}
+}
+im_widget_text_destroy :: proc(this: ^Im_Widget_Text) {
+	text_state_destroy(&this.text)
+}
 
 // Default (no widget).
-im_widget_none_draw :: proc(node: ^Im_Node, render: Render, use_text := true) {
+im_widget_none_draw :: proc(render: Render, node: ^Im_Node) {
 	rect := d2w.D2D_RECT_F {
 		f32(node.measure.pos.x),
 		f32(node.measure.pos.y),
@@ -235,36 +283,12 @@ im_widget_none_draw :: proc(node: ^Im_Node, render: Render, use_text := true) {
 	} else {
 		render.target->FillRectangle(&rect, render.brush)
 	}
-
-	text: if use_text {
-		layout := text_state_get_valid_layout(&node.text) or_break text
-
-		point := d2w.D2D_POINT_2F{f32(node.measure.pos.x), f32(node.measure.pos.y)}
-		render.brush->SetColor(auto_cast &p[.Text])
-		render.target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
-	}
-}
-
-im_widget_create :: proc {
-	im_widget_textbox_create,
-	im_widget_button_create,
-}
-im_widget_update :: proc {
-	im_widget_textbox_update,
-	im_widget_button_update,
-}
-im_widget_destroy :: proc {
-	im_widget_textbox_destroy,
-	im_widget_button_destroy,
-}
-im_widget_draw :: proc {
-	im_widget_textbox_draw,
-	im_widget_none_draw,
 }
 
 Im_Wrapper :: union {
 	^Im_Widget_Textbox,
 	^Im_Widget_Button,
+	^Im_Widget_Text,
 }
 
 // We just need a struct with the max size/alignment for each widget type.
@@ -273,14 +297,18 @@ Im_Wrapper :: union {
 Im_Wrapper_Anon :: struct #raw_union {
 	_: Im_Widget_Textbox,
 	_: Im_Widget_Button,
+	_: Im_Widget_Text,
 }
 
 // TODO: Replace this if we get a statically typed "union typeid" intrinsic.
+// This is cheaper than the dynamic "reflect.get_union_variant_*" methods.
 im_widget_dyn_type :: proc(p: Im_Wrapper) -> typeid {
 	switch v in p {
 	case ^Im_Widget_Textbox:
 		return type_of(v)
 	case ^Im_Widget_Button:
+		return type_of(v)
+	case ^Im_Widget_Text:
 		return type_of(v)
 	case:
 		return nil
@@ -290,41 +318,49 @@ im_widget_dyn_type :: proc(p: Im_Wrapper) -> typeid {
 im_widget_dyn_destroy :: proc(p: Im_Wrapper) {
 	switch v in p {
 	case ^Im_Widget_Textbox:
-		im_widget_destroy(v)
+		im_widget_textbox_destroy(v)
 	case ^Im_Widget_Button:
-		im_widget_destroy(v)
+		im_widget_button_destroy(v)
+	case ^Im_Widget_Text:
+		im_widget_text_destroy(v)
 	}
 }
 
 im_widget_dyn_draw :: proc(node: ^Im_Node, p: Im_Wrapper, render: Render) {
-	#partial switch v in p {
+	switch v in p {
+	case nil:
+		// This is the most common case.
+		// Hopefully it's first in the jump table.
+		im_widget_none_draw(render, node)
 	case ^Im_Widget_Textbox:
-		im_widget_draw(v, node, render)
-	case:
-		im_widget_none_draw(node, render)
+		im_widget_textbox_draw(render, node, v)
+	case ^Im_Widget_Button:
+		im_widget_button_draw(render, node, v)
+	case ^Im_Widget_Text:
+		im_widget_text_draw(render, node, v)
 	}
 }
 
-im_widget_hydrate :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, $T: typeid, dt: f32) -> (out: ^T) {
+@(private = "file")
+im_widget_replace :: proc(node: ^Im_Node, $T: typeid) -> (out: ^T, created: bool) {
 	existing := node.wrapper
 	existing_t := im_widget_dyn_type(existing)
 
 	if existing_t != typeid_of(^T) {
 		if existing_t != nil {
 			im_widget_dyn_destroy(existing)
+			// Unions are data followed by tag. This cast is safe.
+			va.free_item(&im_state.widgets, (cast(^^Im_Wrapper_Anon)&existing)^)
 		}
 
-		buf, _ := va.alloc(&state.widgets)
+		buf, _ := va.alloc(&im_state.widgets)
 		out = cast(^T)buf
 		node.wrapper = out
-
-		im_widget_create(state, out)
+		created = true
 	} else {
-		// Unions are data followed by tag. This cast is safe.
+		// As above, cast is safe.
 		out = (cast(^^T)&existing)^
 	}
-
-	im_widget_update(w, state, node, out, dt)
 
 	return
 }

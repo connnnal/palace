@@ -86,7 +86,7 @@ get :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T), #any_int idx
 }
 
 len :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T)) -> int #no_bounds_check {
-	return va.count
+	return int(va.count)
 }
 
 as_slice :: #force_inline proc "contextless" (va: ^$A/Virtual_Array($T)) -> []T #no_bounds_check {

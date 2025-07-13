@@ -109,44 +109,37 @@ Text_Layout_State :: struct {
 	format:        ^d2w.IDWriteTextFormat,
 }
 
-text_state_hydrate :: proc(backing: ^Maybe(Text_Layout_State), desc: Maybe(Text_Desc)) {
-	if desc, ok := desc.?; ok {
-		value := backing.? or_else {}
-		defer backing^ = value
-
-		value.props = Text_Format_Props {
-			typeface    = desc.typeface,
-			font_weight = desc.font_weight,
-			font_style  = desc.font_style,
-			size        = desc.size,
-		}
-		value.contents = desc.contents
-	} else {
-		text_state_destroy(backing)
+text_state_hydrate :: proc(state: ^Text_Layout_State, desc: Text_Desc) {
+	state.props = Text_Format_Props {
+		typeface    = desc.typeface,
+		font_weight = desc.font_weight,
+		font_style  = desc.font_style,
+		size        = desc.size,
 	}
+	state.contents = desc.contents
 }
 
-text_state_cache :: proc(backing: ^Maybe(Text_Layout_State), available: [2]f32) -> ^d2w.IDWriteTextLayout3 #no_bounds_check {
-	backing := &backing.? or_else panic("bad call")
+text_state_cache :: proc(state: ^Text_Layout_State, available: [2]f32) -> (layout: ^d2w.IDWriteTextLayout3, ok: bool) #no_bounds_check {
+	(len(state.contents) > 0) or_return
 
 	did_change_format: bool
 
 	// Text format.
 	{
-		props := backing.props
+		props := state.props
 		hash := intrinsics.type_hasher_proc(Text_Format_Props)(&props, 0)
 
 		invalid: bool
-		existing := backing.format != nil
+		existing := state.format != nil
 
-		if backing.props_hash != hash || !existing {
-			defer backing.props_hash = hash
+		if state.props_hash != hash || !existing {
+			defer state.props_hash = hash
 			invalid = true
 			did_change_format = true
 		}
 
 		if invalid && existing {
-			backing.format->Release()
+			state.format->Release()
 		}
 		if invalid {
 			hr := text_state.factory->CreateTextFormat(
@@ -157,7 +150,7 @@ text_state_cache :: proc(backing: ^Maybe(Text_Layout_State), available: [2]f32) 
 				.NORMAL,
 				f32(props.size),
 				win.L("en-US"),
-				&backing.format,
+				&state.format,
 			)
 			checkf(hr, "failed to create text format (%v)", props)
 		}
@@ -165,19 +158,19 @@ text_state_cache :: proc(backing: ^Maybe(Text_Layout_State), available: [2]f32) 
 
 	// Text layout.
 	{
-		contents := backing.contents
+		contents := state.contents
 		hash := hash.fnv64a(transmute([]byte)contents)
 
 		invalid: bool
-		existing := backing.layout != nil
+		existing := state.layout != nil
 
-		if backing.contents_hash != hash || !existing || did_change_format {
-			defer backing.contents_hash = hash
+		if state.contents_hash != hash || !existing || did_change_format {
+			defer state.contents_hash = hash
 			invalid = true
 		}
 
 		if invalid && existing {
-			backing.layout->Release()
+			state.layout->Release()
 		}
 		if invalid {
 			str := win.utf8_to_utf16(contents, context.temp_allocator)
@@ -185,36 +178,33 @@ text_state_cache :: proc(backing: ^Maybe(Text_Layout_State), available: [2]f32) 
 			// TODO: This throws with a size of zero.
 			// TODO: Gracefully handle text layouting failures.
 			temp: ^d2w.IDWriteTextLayout
-			hr := text_state.factory->CreateTextLayout(raw_data(str), cast(u32)len(str), backing.format, f32(available[0]), f32(available[1]), &temp)
-			checkf(hr, "failed to create text layout (%v)", backing.contents)
+			hr := text_state.factory->CreateTextLayout(raw_data(str), cast(u32)len(str), state.format, f32(available[0]), f32(available[1]), &temp)
+			checkf(hr, "failed to create text layout (%v)", state.contents)
 			defer temp->Release()
 
-			hr = temp->QueryInterface(d2w.IDWriteTextLayout3_UUID, (^rawptr)(&backing.layout))
+			hr = temp->QueryInterface(d2w.IDWriteTextLayout3_UUID, (^rawptr)(&state.layout))
 			check(hr, "failed to upgrade interface")
 		} else {
 			// This is basically free, just always update this.
-			backing.layout->SetMaxWidth(f32(available[0]))
-			backing.layout->SetMaxHeight(f32(available[1]))
+			state.layout->SetMaxWidth(f32(available[0]))
+			state.layout->SetMaxHeight(f32(available[1]))
 		}
 	}
 
-	return backing.layout
+	return state.layout, true
 }
 
 // TODO: This could actually be stale, we should check the hash.
-text_state_get_valid_layout :: proc(backing: ^Maybe(Text_Layout_State)) -> (ptr: ^d2w.IDWriteTextLayout3, ok: bool) {
-	backing := backing.? or_return
-	return backing.layout, backing.layout != nil
+text_state_get_valid_layout :: proc(state: ^Text_Layout_State) -> (ptr: ^d2w.IDWriteTextLayout3, ok: bool) {
+	return state.layout, state.layout != nil
 }
 
-text_state_destroy :: proc(backing: ^Maybe(Text_Layout_State)) {
-	if value, ok := &backing.?; ok {
-		defer backing^ = nil
-		if value.format != nil {
-			value.format->Release()
-		}
-		if value.layout != nil {
-			value.layout->Release()
-		}
+text_state_destroy :: proc(state: ^Text_Layout_State) {
+	if state.format != nil {
+		state.format->Release()
 	}
+	if state.layout != nil {
+		state.layout->Release()
+	}
+	state^ = {}
 }

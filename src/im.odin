@@ -69,6 +69,14 @@ im_state_init :: proc(state: ^Im_State, allocator := context.allocator) {
 }
 
 im_state_destroy :: proc(state: ^Im_State) {
+	// Nodes have no owned memory or COM objects. Widgets do!
+	// However, widgets are untagged.
+	// We must access them via their owning node's tagged ptr.
+	for i in 0 ..< va.len(&state.nodes) {
+		node := va.get(&state.nodes, i) or_continue
+		im_node_reset(node)
+	}
+
 	delete(state.cache)
 	delete(state.draws)
 	va.destroy(&state.nodes)
@@ -96,12 +104,10 @@ im_frame_end :: proc(state: ^Im_State) {
 		}
 	}
 
-	{
-		// This is surprisingly fast.
-		COLOR_IM := superluminal.MAKE_COLOR(255, 120, 0)
-		superluminal.InstrumentationScope("Shrink Im_State Map", color = COLOR_IM)
-		shrink(&state.cache)
-	}
+	// This is surprisingly fast.
+	COLOR_IM := superluminal.MAKE_COLOR(255, 120, 0)
+	superluminal.InstrumentationScope("Shrink Im_State Map", color = COLOR_IM)
+	shrink(&state.cache)
 }
 
 im_draws :: proc(state: ^Im_State, node: ^Im_Node) {
@@ -133,13 +139,10 @@ Im_Node :: struct {
 	id:          Id,
 	frame:       Frame,
 	using decor: Im_Decor,
-	text:        Maybe(Text_Layout_State),
-	hot:         f32,
 	wrapper:     Im_Wrapper,
 }
 
 im_node_reset :: proc(node: ^Im_Node) {
-	text_state_destroy(&node.text)
 	im_widget_dyn_destroy(node.wrapper)
 }
 
@@ -147,7 +150,6 @@ im_node_reset :: proc(node: ^Im_Node) {
 Im_Props :: struct {
 	using constants: Ly_Constants,
 	using decor:     Im_Decor,
-	text:            Maybe(Text_Desc),
 }
 
 @(deferred_out = im_scope_end)
@@ -180,27 +182,6 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 		ly_node_insert(parent, node)
 	}
 
-	text_state_hydrate(&node.text, props.text)
-
-	if _, ok := props.text.?; ok {
-		text_measure :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
-			node := cast(^Im_Node)node
-
-			available := [2]f32{f32(available.x), f32(available.y)}
-			layout := text_state_cache(&node.text, available)
-
-			// Fear not! DWrite metrics are lazily evaluated.
-			// Updating props can trigger a slow or fast path, depending on their type.
-			// I.e. max dimensions is free; text break sizes from the previous layout control invalidation.
-			metrics: d2w.DWRITE_TEXT_METRICS
-			hr := layout->GetMetrics(&metrics)
-			check(hr, "failed to get text metrics")
-
-			return {i32(metrics.width), i32(metrics.height)}
-		}
-		node.style.measure_func = text_measure
-	}
-
 	log.assert(sa.append(&im_state.stack, node), "node stack overflow")
 
 	return node
@@ -211,14 +192,12 @@ im_scope_end :: proc(node: ^Im_Node) {
 	log.assert(popped == node, "stack mismatch")
 }
 
+// TODO: We could consider only returning nodes when scoped.
+// This means widget update methods always operate within their attached node's scope.
+// This therefore allows widgets to place nodes within themselves.
+
 im_leaf :: proc(id: Id, style: Im_Props) -> ^Im_Node {
 	return im_scope(id, style)
-}
-
-im_leafw :: proc(id: Id, style: Im_Props, w: ^Window, $T: typeid) -> (^Im_Node, ^T) {
-	node := im_scope(id, style)
-	inner := im_widget_hydrate(w, im_state, node, T, 1 / 144.0)
-	return node, inner
 }
 
 im_recurse :: proc(root: ^Im_Node, available: [2]i32) {
@@ -226,11 +205,11 @@ im_recurse :: proc(root: ^Im_Node, available: [2]i32) {
 }
 
 // TODO: Ideally this is template-ised on the "mouse_ok" param.
-im_hot :: proc(measure: Ly_Output, hot: ^f32, mouse: Maybe([2]i32), dt: f32) {
+im_hot :: proc(measure: Ly_Output, mouse: Maybe([2]i32), dt: f32, hot: ^f32) {
 	mouse, mouse_ok := mouse.?
 
 	in_bounds: bool
-	#no_bounds_check if mouse_ok {
+	if mouse_ok {
 		into := mouse - measure.pos
 		size := measure.size
 		in_bounds = into.x >= 0 && into.x < size.x && into.y >= 0 && into.y < size.y

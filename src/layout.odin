@@ -123,7 +123,7 @@ ly_evaluate_length :: proc(dim: Ly_Dim, available: Ly_Length) -> (length: Ly_Len
 		case i32:
 			return Ly_Length(value)
 		case f32:
-			return Ly_Length(i32(f32(available) * value))
+			return Ly_Length(f32(available) * value)
 		case nil:
 			return LY_UNDEFINED
 		}
