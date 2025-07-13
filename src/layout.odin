@@ -263,13 +263,10 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 	}
 }
 
-ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
+ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 	if node.style.measure_func != nil {
-		box_size := node.style.measure_func(node, available)
-
-		node.measure.size = box_size
-
-		return node.measure.size
+		node.measure.size = node.style.measure_func(node, available)
+		return
 	}
 
 	mx, cx := ly_axes(node.style.flow)
@@ -320,6 +317,4 @@ ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2
 	node.measure.content = content
 
 	ly_position_flexbox(node)
-
-	return node.measure.size
 }
