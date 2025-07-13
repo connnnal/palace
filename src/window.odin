@@ -43,8 +43,9 @@ In_Event :: struct {
 	w:         ^Window,
 	modifiers: In_Modifiers,
 	value:     union {
-		rune,
-		In_Click,
+		rune, // Codepoint.
+		u32, // Other key.
+		In_Click, // Mouse click.
 	},
 }
 
@@ -95,6 +96,8 @@ wind_init :: proc "contextless" () {
 				this.modifiers |= {.Ctrl}
 			case win.VK_MENU:
 				this.modifiers |= {.Alt}
+			case win.VK_LEFT, win.VK_RIGHT, win.VK_UP, win.VK_DOWN:
+				append(&wind_state.events, In_Event{this, this.modifiers, u32(wparam)})
 			case:
 				break msg_opt
 			}

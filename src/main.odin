@@ -14,28 +14,28 @@ import d2w "lib:odin_d2d_dwrite"
 import "lib:superluminal"
 
 Render :: struct {
-	render_target: ^d2w.ID2D1RenderTarget,
-	brush:         ^d2w.ID2D1SolidColorBrush,
-	bmp:           ^d2w.ID2D1BitmapBrush,
+	target: ^d2w.ID2D1RenderTarget,
+	brush:  ^d2w.ID2D1SolidColorBrush,
+	bmp:    ^d2w.ID2D1BitmapBrush,
 }
 
-render_setup :: proc(r: ^Render, rt: ^d2w.ID2D1RenderTarget) {
+render_setup :: proc(render: ^Render, render_target: ^d2w.ID2D1RenderTarget) {
 	superluminal.InstrumentationScope("Rt Resources", color = superluminal.MAKE_COLOR(255, 0, 255))
 
-	rt->AddRef()
-	r.render_target = rt
+	render.target = render_target
+	render.target->AddRef()
 
 	img := image.load_from_bytes(#load("../rsc/paper-6-TEX.png"), {.alpha_add_if_missing}, context.temp_allocator) or_else log.panic("failed to load image")
 	bytes := bytes.buffer_to_bytes(&img.pixels)
 	defer image.destroy(img, context.temp_allocator)
 
 	IDENTITY := transmute(d2w.D2D_MATRIX_3X2_F)[6]f32{1, 0, 0, 1, 0, 0}
-	hr := rt->CreateSolidColorBrush(&{}, &{1.0, IDENTITY}, &r.brush)
+	hr := render.target->CreateSolidColorBrush(&{}, &{1.0, IDENTITY}, &render.brush)
 	check(hr, "failed to create brush")
 
 	bitmap: ^d2w.ID2D1Bitmap
 	hr =
-	rt->CreateBitmap(
+	render.target->CreateBitmap(
 		{u32(img.width), u32(img.height)},
 		raw_data(bytes),
 		u32(img.width) * 4 * size_of(u8),
@@ -46,16 +46,16 @@ render_setup :: proc(r: ^Render, rt: ^d2w.ID2D1RenderTarget) {
 	defer bitmap->Release()
 
 	IDENTITY = transmute(d2w.D2D_MATRIX_3X2_F)([6]f32{1, 0, 0, 1, 0, 0} * 0.28)
-	hr = rt->CreateBitmapBrush(bitmap, &{.WRAP, .WRAP, .LINEAR}, &{0.15, IDENTITY}, &r.bmp)
+	hr = render.target->CreateBitmapBrush(bitmap, &{.WRAP, .WRAP, .LINEAR}, &{0.15, IDENTITY}, &render.bmp)
 	check(hr, "failed to create bitmap brush")
 }
 
-render_reset :: proc(r: ^Render) {
-	if r^ != {} {
-		r.render_target->Release()
-		r.brush->Release()
-		r.bmp->Release()
-		r^ = {}
+render_reset :: proc(render: ^Render) {
+	if render^ != {} {
+		render.target->Release()
+		render.brush->Release()
+		render.bmp->Release()
+		render^ = {}
 	}
 }
 
@@ -170,22 +170,7 @@ main :: proc() {
 
 		w.render_target->SetTextAntialiasMode(.CLEARTYPE)
 		for v in w.im.draws {
-			rect := d2w.D2D_RECT_F{f32(v.measure.pos.x), f32(v.measure.pos.y), f32(v.measure.size.x + v.measure.pos.x), f32(v.measure.size.y + v.measure.pos.y)}
-			render.brush->SetColor(auto_cast &v.color)
-			if v.color == p[.Background] {
-				w.render_target->FillRectangle(&rect, render.brush)
-				w.render_target->FillRectangle(&rect, render.bmp)
-			} else {
-				w.render_target->FillRectangle(&rect, render.brush)
-			}
-
 			im_widget_dyn_draw(v, v.wrapper, render)
-
-			layout := text_state_get_valid_layout(&v.text) or_continue
-
-			point := d2w.D2D_POINT_2F{f32(v.measure.pos.x), f32(v.measure.pos.y)}
-			render.brush->SetColor(auto_cast &p[.Text])
-			w.render_target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
 		}
 	}
 

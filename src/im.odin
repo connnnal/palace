@@ -10,6 +10,7 @@ import "core:math"
 import "core:strings"
 
 import d2w "lib:odin_d2d_dwrite"
+import "lib:superluminal"
 import va "lib:virtual_array"
 
 Id :: u32
@@ -94,6 +95,13 @@ im_frame_end :: proc(state: ^Im_State) {
 			delete_key(&state.cache, id)
 		}
 	}
+
+	{
+		// If this turns out to be slow, we could never unsize the map and take the memory hit.
+		COLOR_IM := superluminal.MAKE_COLOR(255, 120, 0)
+		superluminal.InstrumentationScope("Shrink Im_State Map", color = COLOR_IM)
+		shrink(&state.cache)
+	}
 }
 
 im_draws :: proc(state: ^Im_State, node: ^Im_Node) {
@@ -151,36 +159,28 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 
 	_, value_ptr, just_inserted := map_entry(&im_state.cache, id) or_else log.panic("failed to allocate map space")
 	if just_inserted {
+		// Get a fresh zero-initialised node.
 		value_ptr^, _ = va.alloc(&im_state.nodes)
+		node := value_ptr^
+		node.id = id
+	} else {
+		// Retain state, but we need to clear connections to the other (potentially invalid) nodes.
+		node := value_ptr^
+		log.assertf(node.frame < im_state.frame, "hash collision %v", id)
+		log.assertf(node.frame == im_state.frame - 1, "stale node %v", id)
+		ly_node_clear(node)
 	}
 
 	node := value_ptr^
-	switch node.frame {
-	case im_state.frame:
-		// Node used this frame!
-		log.panicf("hash collision %v", id)
-	case im_state.frame - 1:
-		// Node used previous frame. Continuity.
-		break
-	case:
-		// Node is stale, break continuity.
-		im_node_reset(node)
-		node^ = {}
-	}
-
-	ly_node_clear(node)
-
 	node.decor = props.decor
 	node.style = props.constants
-	text_state_hydrate(&node.text, props.text)
-
-	node.id = id
 	node.frame = im_state.frame
 	node.style = props
-	node.frame = im_state.frame
 	if has_parent {
 		ly_node_insert(parent, node)
 	}
+
+	text_state_hydrate(&node.text, props.text)
 
 	if _, ok := props.text.?; ok {
 		text_measure :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
@@ -201,7 +201,7 @@ im_scope :: proc(id: Id, props: Im_Props) -> ^Im_Node {
 		node.style.measure_func = text_measure
 	}
 
-	log.ensure(sa.append(&im_state.stack, node), "node stack overflow")
+	log.assert(sa.append(&im_state.stack, node), "node stack overflow")
 
 	return node
 }
@@ -213,6 +213,12 @@ im_scope_end :: proc(node: ^Im_Node) {
 
 im_leaf :: proc(id: Id, style: Im_Props) -> ^Im_Node {
 	return im_scope(id, style)
+}
+
+im_leafw :: proc(id: Id, style: Im_Props, w: ^Window, $T: typeid) -> (^Im_Node, ^T) {
+	node := im_scope(id, style)
+	inner := im_widget_hydrate(w, im_state, node, T, 1 / 144.0)
+	return node, inner
 }
 
 im_recurse :: proc(root: ^Im_Node, available: [2]i32) {

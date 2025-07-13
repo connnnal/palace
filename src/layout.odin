@@ -221,10 +221,8 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 	}
 }
 
-// TODO: Imagine if we made this SIMD lol.
 ly_compute_flexbox_layout :: proc(node: ^Ly_Node, available: [2]Ly_Length) -> [2]i32 {
 	if node.style.measure_func != nil {
-		// TODO: Kind of a hack to resume typical layout flow after measuring.
 		box_size := node.style.measure_func(node, available)
 
 		node.measure.size = box_size
