@@ -7,7 +7,6 @@ import "core:image"
 import "core:image/png"
 import "core:log"
 import "core:math/rand"
-import "core:mem"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
@@ -128,13 +127,20 @@ main :: proc() {
 						// im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
 						// im_leaf(id("foo3"), {color = p[.Midground], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 					}
-					if root := im_scope(id("inner"), {flow = .Col, gap = 8, padding = 64, grow = true, color = p[.Foreground]}); true {
+					if root := im_scope(id("inner"), {flow = .Col, gap = 8, padding = 64, grow = true, align_items = .FlexStart, color = p[.Foreground]}); true {
 						// im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
 						// im_leaf(id("foo3"), {color = p[.Midground], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
 						// im_leaf(
 						// 	id("foo"),
 						// 	{color = p[.Foreground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128 + i32(frame % 4) * 8, "let's do some word wrapping! :^)"}},
 						// )
+
+						if node := im_scope(id("button"), {padding = {32, 16}, color = p[.Void]}); true {
+							im_widget_button_bind(node, w, dt)
+
+							node := im_leaf(id("foo4"), {color = p[.Content]})
+							im_widget_text_bind(node, {.Special, .BLACK, .NORMAL, 24, "click me"})
+						}
 					}
 				}
 			}
@@ -164,6 +170,10 @@ main :: proc() {
 			render_reset(&render)
 			render_setup(&render, w.render_target)
 		}
+
+		// TODO: I dislike this here. Paint should have no knowledge of the simulation.
+		im_ctx_enter(&w.im)
+		defer im_ctx_exit(&w.im)
 
 		w.render_target->SetTextAntialiasMode(.CLEARTYPE)
 		for v in w.im.draws {

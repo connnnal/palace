@@ -120,8 +120,6 @@ text_state_hydrate :: proc(state: ^Text_Layout_State, desc: Text_Desc) {
 }
 
 text_state_cache :: proc(state: ^Text_Layout_State, available: [2]f32) -> (layout: ^d2w.IDWriteTextLayout3, ok: bool) #no_bounds_check {
-	(len(state.contents) > 0) or_return
-
 	did_change_format: bool
 
 	// Text format.
@@ -158,36 +156,39 @@ text_state_cache :: proc(state: ^Text_Layout_State, available: [2]f32) -> (layou
 
 	// Text layout.
 	{
-		contents := state.contents
-		hash := hash.fnv64a(transmute([]byte)contents)
+		available: [2]f32 = {f32(available[0]), f32(available[1])}
+		hash := hash.fnv64a(transmute([]byte)state.contents)
 
-		invalid: bool
+		destroy, recreate: bool
 		existing := state.layout != nil
 
 		if state.contents_hash != hash || !existing || did_change_format {
 			defer state.contents_hash = hash
-			invalid = true
+			destroy = existing
+			recreate = len(state.contents) > 0
 		}
 
-		if invalid && existing {
+		if destroy {
 			state.layout->Release()
+			state.layout = nil
 		}
-		if invalid {
-			str := win.utf8_to_utf16(contents, context.temp_allocator)
+		if recreate {
+			str := win.utf8_to_utf16(state.contents, context.temp_allocator)
 
 			// TODO: This throws with a size of zero.
 			// TODO: Gracefully handle text layouting failures.
 			temp: ^d2w.IDWriteTextLayout
-			hr := text_state.factory->CreateTextLayout(raw_data(str), cast(u32)len(str), state.format, f32(available[0]), f32(available[1]), &temp)
+			hr := text_state.factory->CreateTextLayout(raw_data(str), cast(u32)len(str), state.format, available[0], available[1], &temp)
 			checkf(hr, "failed to create text layout (%v)", state.contents)
 			defer temp->Release()
 
 			hr = temp->QueryInterface(d2w.IDWriteTextLayout3_UUID, (^rawptr)(&state.layout))
 			check(hr, "failed to upgrade interface")
-		} else {
+		}
+		if !recreate && !destroy && existing {
 			// This is basically free, just always update this.
-			state.layout->SetMaxWidth(f32(available[0]))
-			state.layout->SetMaxHeight(f32(available[1]))
+			state.layout->SetMaxWidth(available[0])
+			state.layout->SetMaxHeight(available[1])
 		}
 	}
 

@@ -7,9 +7,10 @@ import "core:fmt"
 import "core:hash"
 import "core:log"
 import "core:math"
+import "core:mem"
+import "core:mem/tlsf"
 import "core:strings"
 
-import d2w "lib:odin_d2d_dwrite"
 import "lib:superluminal"
 import va "lib:virtual_array"
 
@@ -52,19 +53,25 @@ id :: proc {
 Frame :: u64
 
 Im_State :: struct #no_copy {
-	allocator: runtime.Allocator,
+	frame:     Frame,
 	stack:     sa.Small_Array(8, ^Im_Node),
 	cache:     map[Id]^Im_Node,
-	frame:     Frame,
-	draws:     [dynamic]^Im_Node,
 	nodes:     va.Virtual_Array(Im_Node),
 	widgets:   va.Virtual_Array(Im_Wrapper_Anon),
+	draws:     [dynamic]^Im_Node,
+	allocator: runtime.Allocator,
+	heap:      tlsf.Allocator,
+	// TODO: If uncleared, nodes could inherit an unrelated dead node's state.
+	focus:     Id,
 }
 
 im_state_init :: proc(state: ^Im_State, allocator := context.allocator) {
-	state.allocator = allocator
-	state.draws.allocator = allocator
-	state.cache.allocator = allocator
+	err := tlsf.init_from_allocator(&state.heap, allocator, mem.Megabyte)
+	log.assertf(err == nil, "failed to init tlsf allocator %v", err)
+	state.allocator = tlsf.allocator(&state.heap)
+
+	state.draws.allocator = state.allocator
+	state.cache.allocator = state.allocator
 	state.frame = 2
 }
 
@@ -81,6 +88,8 @@ im_state_destroy :: proc(state: ^Im_State) {
 	delete(state.draws)
 	va.destroy(&state.nodes)
 	va.destroy(&state.widgets)
+
+	tlsf.destroy(&state.heap)
 }
 
 // TODO: Faster to set global, then memcpy back? Not ptr?
@@ -108,6 +117,14 @@ im_frame_end :: proc(state: ^Im_State) {
 	COLOR_IM := superluminal.MAKE_COLOR(255, 120, 0)
 	superluminal.InstrumentationScope("Shrink Im_State Map", color = COLOR_IM)
 	shrink(&state.cache)
+}
+
+im_ctx_enter :: proc(state: ^Im_State) {
+	im_state = state
+}
+
+im_ctx_exit :: proc(state: ^Im_State) {
+	defer im_state = nil
 }
 
 im_draws :: proc(state: ^Im_State, node: ^Im_Node) {
@@ -204,17 +221,16 @@ im_recurse :: proc(root: ^Im_Node, available: [2]i32) {
 	ly_compute_flexbox_layout(root, {Ly_Length(available.x), Ly_Length(available.y)})
 }
 
+im_in_box :: #force_inline proc "contextless" (measure: Ly_Output, mouse: [2]i32) -> bool {
+	into := mouse - measure.pos
+	size := measure.size
+	return into.x >= 0 && into.x < size.x && into.y >= 0 && into.y < size.y
+}
+
 // TODO: Ideally this is template-ised on the "mouse_ok" param.
 im_hot :: proc(measure: Ly_Output, mouse: Maybe([2]i32), dt: f32, hot: ^f32) {
 	mouse, mouse_ok := mouse.?
-
-	in_bounds: bool
-	if mouse_ok {
-		into := mouse - measure.pos
-		size := measure.size
-		in_bounds = into.x >= 0 && into.x < size.x && into.y >= 0 && into.y < size.y
-	}
-
+	in_bounds := mouse_ok && im_in_box(measure, mouse)
 	hot^ = exp_decay(hot^, in_bounds ? 1 : 0, 28, dt)
 }
 
@@ -234,11 +250,11 @@ im_dump :: proc(node: ^Im_Node, allocator := context.temp_allocator) -> string {
 		}
 		// Visit.
 		{
-			for v in 0 ..< depth {fmt.sbprint(&b, "\t")}
+			for _ in 0 ..< depth {fmt.sbprint(&b, "\t")}
 			fmt.sbprintf(&b, "%#x\n", node.id)
-			for v in 0 ..< depth {fmt.sbprint(&b, "\t")}
+			for _ in 0 ..< depth {fmt.sbprint(&b, "\t")}
 			fmt.sbprintf(&b, "size: %v\n", node.measure.size)
-			for v in 0 ..< depth {fmt.sbprint(&b, "\t")}
+			for _ in 0 ..< depth {fmt.sbprint(&b, "\t")}
 			fmt.sbprintf(&b, "pos: %v\n", node.measure.pos)
 		}
 		// Children.

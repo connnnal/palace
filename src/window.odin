@@ -1,6 +1,7 @@
 package main
 
 import "core:log"
+import "core:mem"
 import "core:time"
 import "core:unicode/utf8"
 
@@ -33,8 +34,13 @@ In_Button :: enum {
 	Middle,
 }
 
+In_Move :: struct {
+	pos: [2]i32,
+}
+
 In_Click :: struct {
 	down:   bool,
+	double: bool,
 	button: In_Button,
 	pos:    [2]i32,
 }
@@ -46,6 +52,7 @@ In_Event :: struct {
 		rune, // Codepoint.
 		u32, // Other key.
 		In_Click, // Mouse click.
+		In_Move, // Mouse move.
 	},
 }
 
@@ -115,14 +122,19 @@ wind_init :: proc "contextless" () {
 			}
 			return 0
 		case win.WM_MOUSEMOVE:
-			this.mouse = [2]i32{win.GET_X_LPARAM(lparam), win.GET_Y_LPARAM(lparam)}
+			pos := [2]i32{win.GET_X_LPARAM(lparam), win.GET_Y_LPARAM(lparam)}
+			this.mouse = pos
 			if !this.mouse_tracking {
 				// TODO: Shouldn't spam call this. Also, fragile with multiple windows.
 				this.mouse_tracking = win.TrackMouseEvent(&{size_of(win.TRACKMOUSEEVENT), win.TME_LEAVE, wnd, win.HOVER_DEFAULT})
 			}
-		case win.WM_LBUTTONDOWN, win.WM_LBUTTONUP, win.WM_RBUTTONDOWN, win.WM_RBUTTONUP:
+			append(&wind_state.events, In_Event{this, this.modifiers, In_Move{pos}})
+		case win.WM_LBUTTONDOWN, win.WM_LBUTTONUP, win.WM_RBUTTONDOWN, win.WM_RBUTTONUP, win.WM_LBUTTONDBLCLK:
 			click: In_Click
 			switch msg {
+			case win.WM_LBUTTONDBLCLK:
+				click.double = true
+				fallthrough
 			case win.WM_LBUTTONDOWN:
 				click.down = true
 				fallthrough
@@ -138,6 +150,7 @@ wind_init :: proc "contextless" () {
 			click.pos = [2]i32{win.GET_X_LPARAM(lparam), win.GET_Y_LPARAM(lparam)}
 			this.mouse = click.pos
 			append(&wind_state.events, In_Event{this, this.modifiers, click})
+			return 0
 		case win.WM_MOUSELEAVE:
 			this.mouse = nil
 			this.mouse_tracking = win.FALSE
@@ -157,7 +170,8 @@ wind_init :: proc "contextless" () {
 			wind_step(this)
 
 			return 0
-		case win.WM_CHAR:
+		case win.WM_CHAR, win.WM_IME_CHAR:
+			// https://what.thedailywtf.com/topic/27102/how-do-i-allow-input-from-the-windows-10-emoji-panel-in-my-c-application/25.
 			wchar := win.WCHAR(wparam)
 			if wparam >= 0xd800 && wparam <= 0xdbff {
 				// https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-char#remarks.
@@ -203,7 +217,7 @@ wind_init :: proc "contextless" () {
 	}
 	wc = win.WNDCLASSEXW {
 		cbSize        = size_of(wc),
-		style         = win.CS_HREDRAW | win.CS_VREDRAW,
+		style         = win.CS_HREDRAW | win.CS_VREDRAW | win.CS_DBLCLKS,
 		lpfnWndProc   = callback,
 		hInstance     = wind_state.instance,
 		hIcon         = win.LoadIconA(nil, win.IDI_APPLICATION),
@@ -348,4 +362,61 @@ wind_events_next :: proc(it: ^int, w: ^Window = nil) -> (^In_Event, bool) {
 wind_events_pop :: proc(it: ^int, loc := #caller_location) {
 	it^ -= 1
 	ordered_remove(&wind_state.events, it^, loc)
+}
+
+wind_clipboard_set :: proc(w: ^Window, text: string) -> (ok: bool) {
+	win.OpenClipboard(w.wnd) or_return
+	defer win.CloseClipboard()
+
+	text := win.utf8_to_utf16(text, context.temp_allocator)
+	(text != nil) or_return
+
+	// The OS takes ownership of this allocation if setting the clipboard succeeds.
+	// On failure, we need to free it ourselves.
+	alloc := win.GlobalAlloc(win.GMEM_MOVEABLE, (1 + len(text)) * size_of(win.WCHAR))
+	(alloc != nil) or_return
+	defer if !ok {win.GlobalFree(alloc)}
+
+	global := win.HGLOBAL(alloc)
+
+	ptr := win.GlobalLock(global)
+	(ptr != nil) or_return
+	defer win.GlobalUnlock(global)
+
+	data := cast([^]u16)ptr
+	mem.copy_non_overlapping(data, raw_data(text), len(text) * size_of(win.WCHAR))
+	data[len(text)] = 0
+
+	ret := win.SetClipboardData(win.CF_UNICODETEXT, win.HANDLE(alloc))
+	(ret != nil) or_return
+
+	return true
+}
+
+wind_clipboard_get :: proc(w: ^Window, allocator := context.temp_allocator) -> (text: string, ok: bool) {
+	win.OpenClipboard(w.wnd) or_return
+	defer win.CloseClipboard()
+
+	win.IsClipboardFormatAvailable(win.CF_UNICODETEXT) or_return
+
+	handle := win.GetClipboardData(win.CF_UNICODETEXT)
+	(handle != nil) or_return
+
+	global := win.HGLOBAL(handle)
+
+	ptr := win.GlobalLock(global)
+	(ptr != nil) or_return
+	defer win.GlobalUnlock(global)
+
+	// Clipboard data is untrusted, cap the length.
+	MAX_CLIPBOARD_CHARS :: 4096
+	data := cast([^]u16)ptr
+	length := 0
+	for c in data[:MAX_CLIPBOARD_CHARS] {
+		(c > 0) or_break
+		length += 1
+	}
+
+	str_utf8, allocator_err := win.wstring_to_utf8(win.wstring(ptr), length, allocator)
+	return str_utf8, allocator_err == nil
 }

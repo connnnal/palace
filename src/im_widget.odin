@@ -22,8 +22,8 @@ handle_char_input :: proc(box: ^text_edit.State, codepoint: rune) {
 		text_edit.perform_command(box, .Delete_Word_Left)
 	case 27:
 		// Escape.
-		// TODO: Handle exiting focus.
-		break
+		// TODO: Exiting here feels really lame.
+		im_state.focus = 0
 	case 1:
 		// Ctrl+A.
 		text_edit.perform_command(box, .Select_All)
@@ -80,10 +80,13 @@ handle_key_input :: proc(box: ^text_edit.State, key: u32, modifiers: In_Modifier
 
 // Textbox.
 Im_Widget_Textbox :: struct #no_copy {
+	// "text_edit.State" stores a pointer.
+	// We can't allow widgets to relocate in memory.
 	box:                     text_edit.State,
 	builder:                 strings.Builder,
 	trailing_hit, is_inside: win.BOOL,
 	text:                    Text_Layout_State,
+	selecting:               bool,
 	hot:                     f32,
 }
 im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widget_Textbox {
@@ -91,11 +94,21 @@ im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widge
 
 	if is_new {
 		this.builder = strings.builder_make(im_state.allocator)
+		strings.write_string(&this.builder, "Default text")
 
-		// Note "text_edit.setup_once" sets a pointer.
-		// We can't allow widgets to relocate in memory.
 		text_edit.init(&this.box, im_state.allocator, im_state.allocator)
 		text_edit.setup_once(&this.box, &this.builder)
+		this.box.clipboard_user_data = w
+		this.box.set_clipboard = proc(user_data: rawptr, text: string) -> (ok: bool) {
+			return wind_clipboard_set(auto_cast user_data, text)
+		}
+		this.box.get_clipboard = proc(user_data: rawptr) -> (text: string, ok: bool) {
+			contents := wind_clipboard_get(auto_cast user_data, context.temp_allocator) or_return
+			contents, _ = strings.remove_all(contents, "\n", context.temp_allocator)
+			contents, _ = strings.remove_all(contents, "\r", context.temp_allocator)
+			return contents, true
+		}
+		this.box.selection = {}
 	}
 
 	text_edit.update_time(&this.box)
@@ -104,30 +117,75 @@ im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widge
 	for v in wind_events_next(&it, w) {
 		#partial switch inner in v.value {
 		case u32:
+			(im_state.focus == node.id) or_continue
 			defer wind_events_pop(&it)
 			handle_key_input(&this.box, inner, v.modifiers)
 		case rune:
+			(im_state.focus == node.id) or_continue
 			defer wind_events_pop(&it)
 			handle_char_input(&this.box, inner)
 		case In_Click:
-			(inner.down && inner.button == .Left) or_continue
+			(inner.button == .Left) or_continue
+
+			inside := im_in_box(node.measure, inner.pos)
+
+			if inner.down {
+				this.selecting = inside
+				// TODO: This isn't compatible with other elements!!
+				im_state.focus = inside ? node.id : 0
+				if inside {
+					defer wind_events_pop(&it)
+
+					layout := text_state_get_valid_layout(&this.text) or_continue
+
+					metrics: d2w.DWRITE_HIT_TEST_METRICS
+					hr := layout->HitTestPoint(
+						f32(inner.pos.x - node.measure.pos.x),
+						f32(inner.pos.y - node.measure.pos.y),
+						&this.trailing_hit,
+						&this.is_inside,
+						&metrics,
+					)
+					win.SUCCEEDED(hr) or_continue
+
+					if inner.double {
+						blip_loc := metrics.textPosition
+						this.box.selection = {int(blip_loc), int(blip_loc)}
+
+						text_edit.perform_command(&this.box, .Word_Right)
+						text_edit.perform_command(&this.box, .Select_Word_Left)
+					} else {
+						blip_loc := metrics.textPosition + (this.trailing_hit ? 1 : 0)
+						this.box.selection = {int(blip_loc), int(blip_loc)}
+					}
+				} else {
+					this.box.selection = {this.box.selection[0], this.box.selection[0]}
+				}
+			} else {
+				if this.selecting {
+					defer wind_events_pop(&it)
+					this.selecting = false
+				}
+			}
+		case In_Move:
+			(this.selecting) or_continue
+			defer wind_events_pop(&it)
+
 			layout := text_state_get_valid_layout(&this.text) or_continue
 
 			metrics: d2w.DWRITE_HIT_TEST_METRICS
 			hr := layout->HitTestPoint(f32(inner.pos.x - node.measure.pos.x), f32(inner.pos.y - node.measure.pos.y), &this.trailing_hit, &this.is_inside, &metrics)
 			win.SUCCEEDED(hr) or_continue
-			defer wind_events_pop(&it)
 
+			// TODO: Handle double-click word into drag (take min/max conditional).
 			blip_loc := metrics.textPosition + (this.trailing_hit ? 1 : 0)
-			this.box.selection = {int(blip_loc), int(blip_loc)}
+			this.box.selection[0] = int(blip_loc)
 		}
 	}
 
 	str := strings.to_string(this.builder)
 	text_state_hydrate(&this.text, Text_Desc{.Body, .THIN, .ITALIC, 96, str})
-	if len(str) > 0 {
-		text_state_cache(&this.text, {f32(node.measure.size.x), f32(node.measure.size.y)})
-	}
+	text_state_cache(&this.text, {f32(node.measure.size.x), f32(node.measure.size.y)})
 
 	im_hot(node.measure, w.mouse, dt, &this.hot)
 
@@ -154,14 +212,14 @@ im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_
 	defer render.target->PopAxisAlignedClip()
 
 	hr: win.HRESULT
-	select: {
-		layout := text_state_get_valid_layout(&this.text) or_break select
-
+	{
 		selection := this.box.selection
 		selection_low, selection_high := text_edit.sorted_selection(&this.box)
 
 		// Drag box.
-		if selection_low != selection_high {
+		drag: if selection_low != selection_high {
+			layout := text_state_get_valid_layout(&this.text) or_break drag
+
 			hit_test: [8]d2w.DWRITE_HIT_TEST_METRICS
 			hit_test_count: u32
 			hr =
@@ -174,28 +232,36 @@ im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_
 				len(hit_test),
 				&hit_test_count,
 			)
-			win.SUCCEEDED(hr) or_break select
+			win.SUCCEEDED(hr) or_break drag
 
 			for test in hit_test[:hit_test_count] {
 				rect := d2w.D2D_RECT_F{test.left, test.top, test.left + test.width, test.top + test.height}
-				render.brush->SetColor(auto_cast &{1, 0, 1, 1})
-				render.target->FillRectangle(&rect, render.brush)
+				render.brush->SetColor(auto_cast &{1, 1, 1, 0.6})
+				render.target->FillRoundedRectangle(&{rect, 4, 4}, render.brush)
 			}
 		}
 
 		// Position blip.
-		{
-			// TODO: What does "isTrailingHit" even do here??
-			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)}
-			metrics: d2w.DWRITE_HIT_TEST_METRICS
-			hr = layout->HitTestTextPosition(u32(selection[0]), win.FALSE, &pos[0], &pos[1], &metrics)
-			win.SUCCEEDED(hr) or_break select
+		if im_state.focus == node.id {
+			// Assume the top-left.
+			offset: [2]f32
+			height := f32(this.text.props.size)
 
+			// But ideally, try to get position at the cursor.
+			attempt: {
+				layout := text_state_get_valid_layout(&this.text) or_break attempt
+
+				// TODO: What does "isTrailingHit" even do here??
+				metrics: d2w.DWRITE_HIT_TEST_METRICS
+				hr = layout->HitTestTextPosition(u32(selection[0]), win.FALSE, &offset[0], &offset[1], &metrics)
+				win.SUCCEEDED(hr) or_break attempt
+
+				height = metrics.height
+			}
+
+			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)} + offset
+			rect := d2w.D2D_RECT_F{pos.x, pos.y, pos.x + 4, pos.y + height}
 			render.brush->SetColor(auto_cast &{0, 1, 0, 1})
-
-			metrics.left += f32(node.measure.pos.x)
-			metrics.top += f32(node.measure.pos.y)
-			rect := d2w.D2D_RECT_F{metrics.left, metrics.top, metrics.left + 4, metrics.top + metrics.height}
 			render.target->FillRectangle(&rect, render.brush)
 		}
 	}
@@ -204,26 +270,36 @@ im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_
 	layout, layout_ok := text_state_get_valid_layout(&this.text)
 	text: if len(str) > 0 && layout_ok {
 		point := d2w.D2D_POINT_2F{f32(node.measure.pos.x), f32(node.measure.pos.y)}
-		render.brush->SetColor(auto_cast &{1, 1, 1, 1})
+		render.brush->SetColor(auto_cast &{1, 1, 1, im_state.focus == node.id ? 1 : 0.5})
 		render.target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
-	} else {
-		im_widget_none_draw(render, node)
 	}
-
 }
 
 // Button.
 Im_Widget_Button :: struct {
 	click: bool,
+	hot:   f32,
 }
-im_widget_button_create :: proc(state: ^Im_State, w: ^Im_Widget_Button) {
+im_widget_button_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widget_Button {
+	this, _ := im_widget_replace(node, Im_Widget_Button)
+
+	im_hot(node.measure, w.mouse, dt, &this.hot)
+	node.color *= (1 + 0.4 * this.hot)
+
+	return this
 }
-im_widget_button_destroy :: proc(w: ^Im_Widget_Button) {
-}
-im_widget_button_update :: proc(w: ^Window, state: ^Im_State, node: ^Im_Node, wg: ^Im_Widget_Button, dt: f32) {
+im_widget_button_destroy :: proc(this: ^Im_Widget_Button) {
 }
 im_widget_button_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Button) {
+	rect := d2w.D2D1_ROUNDED_RECT {
+		{f32(node.measure.pos.x), f32(node.measure.pos.y), f32(node.measure.size.x + node.measure.pos.x), f32(node.measure.size.y + node.measure.pos.y)},
+		8,
+		8,
+	}
+	render.brush->SetColor(auto_cast &node.color)
+	render.target->FillRoundedRectangle(&rect, render.brush)
 }
+
 
 // Text.
 Im_Widget_Text :: struct {
@@ -255,8 +331,6 @@ im_widget_text_bind :: proc(node: ^Im_Node, desc: Text_Desc) {
 	}
 }
 im_widget_text_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Text) {
-	// im_widget_none_draw(render, node)
-
 	text: {
 		layout := text_state_get_valid_layout(&this.text) or_break text
 		point := d2w.D2D_POINT_2F{f32(node.measure.pos.x), f32(node.measure.pos.y)}

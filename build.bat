@@ -9,7 +9,7 @@ SET all_flags=
 IF NOT "%-nocollections%"=="1" (
 	SET all_flags=%all_flags% -collection:src=src -collection:lib=lib
 )
-IF NOT "%-novet%"=="1" (
+IF "%-vet%"=="1" (
 	SET all_flags=%all_flags% -vet
 )
 IF NOT "%-nostyle%"=="1" (
