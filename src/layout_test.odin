@@ -704,7 +704,28 @@ test_custom_absolute :: proc(t: ^testing.T) {
 					yoga_validate(t, yoga_tree(root), {1920, 1080})
 				}
 			}
-
 		}
 	}
+}
+
+// Custom (not from Yoga repo).
+@(test)
+test_custom_negative_margin :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.gap = 8
+	root.style.size = {0.5, 1.0}
+	root.style.margin = -32
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {1.0, 1.0}
+	root_child1.style.absolute = true
+	root_child1.style.margin = -32
+	ly_node_insert(root, root_child1)
+
+	ly_compute_flexbox_layout(root, {1920, 1080})
+	yoga_validate(t, yoga_tree(root), {1920, 1080})
 }
