@@ -25,7 +25,10 @@ package main
 
 import "base:runtime"
 import "core:container/queue"
+import "core:fmt"
 import "core:math"
+import "core:strings"
+import "core:terminal/ansi"
 import "core:testing"
 
 import "lib:yoga"
@@ -159,8 +162,9 @@ yoga_validate :: proc(t: ^testing.T, node: yoga.Node_Ref, available: [2]Ly_Lengt
 		}
 	}
 
-	// Verify position.
+	// Calculate layout.
 	{
+
 		conv :: proc(length: Ly_Length) -> f32 {
 			if value, ok := ly_length(length); ok {
 				return f32(value)
@@ -169,34 +173,104 @@ yoga_validate :: proc(t: ^testing.T, node: yoga.Node_Ref, available: [2]Ly_Lengt
 				return math.nan_f32()
 			}
 		}
-
 		yoga.NodeCalculateLayout(node, conv(available.x), conv(available.y), .LTR)
+	}
+
+	// Verify attributes.
+	{
+		COLOR_ERROR :: ansi.CSI + ansi.FG_RED + ansi.SGR
+		COLOR_CORRECTION :: ansi.CSI + ansi.FG_BRIGHT_CYAN + ansi.SGR
+		COLOR_IGNORE :: ansi.CSI + ansi.FG_BRIGHT_BLACK + ansi.SGR
+		COLOR_RESET :: ansi.CSI + ansi.RESET + ansi.SGR
+
+		write_indent :: proc(buf: ^strings.Builder, depth: int) {
+			for i in 0 ..< depth {
+				strings.write_byte(buf, '\t')
+			}
+		}
+		write_check :: proc(buf: ^strings.Builder, depth: int, name: string, value: $T, expected: T) -> (ok: bool) {
+			use_color := .Terminal_Color in context.logger.options
+			ok = value == expected
+
+			write_indent(buf, depth)
+			fmt.sbprintf(buf, "%v:\t", name)
+			if !ok {
+				if use_color {
+					fmt.sbprint(buf, COLOR_ERROR)
+				}
+			}
+			fmt.sbprintf(buf, "%v", value)
+			if !ok {
+				if use_color {
+					fmt.sbprint(buf, COLOR_CORRECTION)
+				}
+				fmt.sbprintf(buf, "\t->%v", expected)
+				if use_color {
+					fmt.sbprint(buf, COLOR_RESET)
+				}
+			}
+			fmt.sbprint(buf, '\n')
+
+			return
+		}
+		write_meta :: proc(buf: ^strings.Builder, depth: int, name: string, value: $T) {
+			use_color := .Terminal_Color in context.logger.options
+
+			write_indent(buf, depth)
+			if use_color {
+				fmt.sbprint(buf, COLOR_IGNORE)
+			}
+			fmt.sbprintf(buf, "%v:\t%v", name, value)
+			if use_color {
+				fmt.sbprint(buf, COLOR_RESET)
+			}
+			fmt.sbprint(buf, '\n')
+		}
+
+		buf: strings.Builder
+		strings.builder_init(&buf, context.temp_allocator)
+		strings.write_byte(&buf, '\n')
 
 		Pack :: struct {
 			node:   yoga.Node_Ref,
 			offset: [2]f32,
+			depth:  int,
 		}
 		q: queue.Queue(Pack)
 		queue.init(&q, allocator = context.temp_allocator)
 
-		node := node
-		offset: [2]f32
+		ok := true
+		pack: Pack = {node, 0, 1}
 		for {
+			node, offset, depth := expand_values(pack)
 			user := cast(^Ly_Node)yoga.NodeGetContext(node)
 
 			pos := offset + {yoga.NodeLayoutGetLeft(node), yoga.NodeLayoutGetTop(node)}
 
-			testing.expect_value(t, f32(user.measure.size[0]), yoga.NodeLayoutGetWidth(node), loc)
-			testing.expect_value(t, f32(user.measure.size[1]), yoga.NodeLayoutGetHeight(node), loc)
-			testing.expect_value(t, f32(user.measure.pos[0]), pos[0], loc)
-			testing.expect_value(t, f32(user.measure.pos[1]), pos[1], loc)
+			write_indent(&buf, depth)
+			fmt.sbprintfln(&buf, "--")
+
+			// Using "&&=" will cause a short circuit.
+			// We want these checks to run on all nodes, even if we're already encountered a failure.
+			ok &= write_check(&buf, depth, "size0", f32(user.measure.size[0]), yoga.NodeLayoutGetWidth(node))
+			ok &= write_check(&buf, depth, "size0", f32(user.measure.size[1]), yoga.NodeLayoutGetHeight(node))
+			ok &= write_check(&buf, depth, "pos0", f32(user.measure.pos[0]), pos[0])
+			ok &= write_check(&buf, depth, "pos1", f32(user.measure.pos[1]), pos[1])
+			write_meta(&buf, depth, "flow", user.style.flow)
+			write_meta(&buf, depth, "justc", user.style.justify_content)
+			write_meta(&buf, depth, "aligi", user.style.align_items)
+			write_meta(&buf, depth, "gap", user.style.gap)
+			write_meta(&buf, depth, "padd", user.style.padding_flat)
+			write_meta(&buf, depth, "marg", user.style.margin_flat)
 
 			for i in 0 ..< yoga.NodeGetChildCount(node) {
-				queue.append(&q, Pack{yoga.NodeGetChild(node, i), pos})
+				queue.append(&q, Pack{yoga.NodeGetChild(node, i), pos, depth + 1})
 			}
 
-			node, offset = expand_values(queue.pop_front_safe(&q) or_break)
+			pack = queue.pop_front_safe(&q) or_break
 		}
+
+		testing.expect(t, ok, strings.to_string(buf))
 	}
 }
 

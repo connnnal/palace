@@ -54,7 +54,7 @@ IF "%-instrument%"=="1" (
 
 :: Targets
 IF "%-test%"=="1" (
-	odin test src -out:palace_tests.exe %all_flags%
+	odin test src -out:palace_tests.exe %all_flags% -keep-executable
 )
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
