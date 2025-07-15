@@ -139,6 +139,8 @@ yoga_style :: proc(node: yoga.Node_Ref, style: Ly_Constants) {
 		}
 		yoga.NodeStyleSetFlexDirection(node, dir)
 	}
+	// Absolute.
+	yoga.NodeStyleSetPositionType(node, style.absolute ? .Absolute : .Relative)
 }
 
 @(private = "file")
@@ -252,13 +254,14 @@ yoga_validate :: proc(t: ^testing.T, node: yoga.Node_Ref, available: [2]Ly_Lengt
 
 			// Using "&&=" will cause a short circuit.
 			// We want these checks to run on all nodes, even if we're already encountered a failure.
-			ok &= write_check(&buf, depth, "size0", f32(user.measure.size[0]), yoga.NodeLayoutGetWidth(node))
-			ok &= write_check(&buf, depth, "size0", f32(user.measure.size[1]), yoga.NodeLayoutGetHeight(node))
 			ok &= write_check(&buf, depth, "pos0", f32(user.measure.pos[0]), pos[0])
 			ok &= write_check(&buf, depth, "pos1", f32(user.measure.pos[1]), pos[1])
+			ok &= write_check(&buf, depth, "size0", f32(user.measure.size[0]), yoga.NodeLayoutGetWidth(node))
+			ok &= write_check(&buf, depth, "size1", f32(user.measure.size[1]), yoga.NodeLayoutGetHeight(node))
 			write_meta(&buf, depth, "flow", user.style.flow)
 			write_meta(&buf, depth, "justc", user.style.justify_content)
 			write_meta(&buf, depth, "aligi", user.style.align_items)
+			write_meta(&buf, depth, "abs", user.style.absolute)
 			write_meta(&buf, depth, "gap", user.style.gap)
 			write_meta(&buf, depth, "padd", user.style.padding_flat)
 			write_meta(&buf, depth, "marg", user.style.margin_flat)
@@ -657,4 +660,51 @@ test_custom_percent_padding :: proc(t: ^testing.T) {
 
 	ly_compute_flexbox_layout(root, {2048, 2048})
 	yoga_validate(t, yoga_tree(root), {2048, 2048})
+}
+
+// Custom (not from Yoga repo).
+@(test)
+test_custom_absolute :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.gap = 8
+	root.style.padding = 32
+	root.style.size = {0.5, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {256, 256}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {64, 46}
+	root_child1.style.absolute = true
+	ly_node_insert(root, root_child1)
+
+	root_child1_child0 := new(Ly_Node, context.temp_allocator)
+	root_child1_child0.style.size = {32, 32}
+	ly_node_insert(root_child1, root_child1_child0)
+
+	root_child2 := new(Ly_Node, context.temp_allocator)
+	root_child2.style.size = {64, 64}
+	ly_node_insert(root, root_child2)
+
+	for align_items in Ly_Align {
+		root.style.align_items = align_items
+		for justify_content in Ly_Justify {
+			root.style.justify_content = justify_content
+
+			for &axis in root_child0.style.margin_flat[:] {
+				axis = 32
+				defer axis = 0
+
+				for &axis in root_child1.style.margin_flat[:] {
+					axis = 32
+					defer axis = 0
+
+					ly_compute_flexbox_layout(root, {1920, 1080})
+					yoga_validate(t, yoga_tree(root), {1920, 1080})
+				}
+			}
+
+		}
+	}
 }

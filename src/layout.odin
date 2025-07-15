@@ -76,6 +76,7 @@ Ly_Constants :: struct {
 		gap:             i32        | 8,
 		flow:            Ly_Flow    | 4,
 		grow:            bool       | 1,
+		absolute:        bool       | 1,
 	},
 }
 
@@ -192,40 +193,52 @@ ly_position_flexbox :: proc(node: ^Ly_Node) {
 		for child := node.first; child != nil; child = child.next {
 			outer := ly_outer(child.style, child.measure.size)
 
-			defer flex_line += outer[int(mx)]
-			defer flex_line += node.style.gap
-
-			child.measure.pos[int(mx)] = node.measure.pos[int(mx)] + node.style.padding[int(mx)][0] + child.style.margin[int(mx)][0] + flex_line
+			if !child.style.absolute {
+				defer flex_line += outer[int(mx)]
+				defer flex_line += node.style.gap
+				child.measure.pos[int(mx)] = node.measure.pos[int(mx)] + node.style.padding[int(mx)][0] + child.style.margin[int(mx)][0] + flex_line
+			} else {
+				child.measure.pos[int(mx)] = node.measure.pos[int(mx)] + node.style.padding[int(mx)][0] + child.style.margin[int(mx)][0]
+			}
 		}
 	case .FlexEnd:
 		for child := node.first; child != nil; child = child.next {
 			outer := ly_outer(child.style, child.measure.size)
 
-			defer flex_line += outer[int(mx)]
-			defer flex_line += node.style.gap
+			if !child.style.absolute {
+				defer flex_line += outer[int(mx)]
+				defer flex_line += node.style.gap
 
-			child.measure.pos[int(mx)] =
-				node.measure.pos[int(mx)] +
-				node.measure.size[int(mx)] -
-				node.style.padding[int(mx)][1] -
-				node.measure.content[.Main] +
-				child.style.margin[int(mx)][0] +
-				flex_line
+				child.measure.pos[int(mx)] =
+					node.measure.pos[int(mx)] +
+					node.measure.size[int(mx)] -
+					node.style.padding[int(mx)][1] -
+					node.measure.content[.Main] +
+					child.style.margin[int(mx)][0] +
+					flex_line
+			} else {
+				child.measure.pos[int(mx)] =
+					node.measure.pos[int(mx)] +
+					node.measure.size[int(mx)] -
+					node.style.padding[int(mx)][1] -
+					child.style.margin[int(mx)][1] -
+					child.measure.size[int(mx)]
+			}
 		}
 	case .Center:
+		node_inner := ly_inner(node.style, node.measure.size)[int(mx)]
+		node_inner_tl := node.measure.pos[int(mx)] + node.style.padding[int(mx)][0]
 		for child := node.first; child != nil; child = child.next {
 			outer := ly_outer(child.style, child.measure.size)
 
-			defer flex_line += outer[int(mx)]
-			defer flex_line += node.style.gap
+			if !child.style.absolute {
+				defer flex_line += outer[int(mx)]
+				defer flex_line += node.style.gap
 
-			child.measure.pos[int(mx)] =
-				node.measure.pos[int(mx)] +
-				node.measure.size[int(mx)] / 2 -
-				node.style.padding[int(mx)][0] -
-				node.measure.content[.Main] / 2 +
-				child.style.margin[int(mx)][0] +
-				flex_line
+				child.measure.pos[int(mx)] = node_inner_tl + node_inner / 2 - node.measure.content[.Main] / 2 + child.style.margin[int(mx)][0] + flex_line
+			} else {
+				child.measure.pos[int(mx)] = node_inner_tl + node_inner / 2 - outer[int(mx)] / 2 + child.style.margin[int(mx)][0]
+			}
 		}
 	}
 
@@ -277,15 +290,17 @@ ly_sizing_flexbox :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 
 		child_count: i32 = 0
 		for child := node.first; child != nil; child = child.next {
-			defer child_count += 1
-
 			(child.style.grow == false) or_continue
 
 			ly_sizing_flexbox(child, available_inner)
 
-			outer := ly_outer(child.style, child.measure.size)
-			content[.Main] += outer[int(mx)]
-			content[.Cross] = max(content[.Cross], outer[int(cx)])
+			if !child.style.absolute {
+				defer child_count += 1
+
+				outer := ly_outer(child.style, child.measure.size)
+				content[.Main] += outer[int(mx)]
+				content[.Cross] = max(content[.Cross], outer[int(cx)])
+			}
 		}
 
 		content[.Main] += node.style.gap * max(0, child_count - 1)
@@ -296,6 +311,7 @@ ly_sizing_flexbox :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 		}
 
 		for child := node.first; child != nil; child = child.next {
+			(child.style.absolute == false) or_continue
 			(child.style.grow == true) or_continue
 
 			available_inner[int(mx)] = Ly_Length(free_mx)
