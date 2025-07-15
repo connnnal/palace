@@ -75,6 +75,8 @@ handle_key_input :: proc(box: ^text_edit.State, key: u32, modifiers: In_Modifier
 	case win.VK_DOWN:
 		// TODO: Needs awareness of text layout.
 		text_edit.perform_command(box, .Down)
+	case win.VK_DELETE:
+		text_edit.perform_command(box, .Delete)
 	}
 }
 
@@ -338,7 +340,8 @@ im_widget_text_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Tex
 		render.target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
 	}
 }
-im_widget_text_destroy :: proc(this: ^Im_Widget_Text) {
+im_widget_text_destroy :: proc(node: ^Im_Node, this: ^Im_Widget_Text) {
+	node.style.measure_func = nil
 	text_state_destroy(&this.text)
 }
 
@@ -389,18 +392,19 @@ im_widget_dyn_type :: proc(p: Im_Wrapper) -> typeid {
 	}
 }
 
-im_widget_dyn_destroy :: proc(p: Im_Wrapper) {
+// TODO: We require the node here so widgets can unbind callbacks on their owned nodes; not ideal?
+im_widget_dyn_destroy :: proc(node: ^Im_Node, p: Im_Wrapper) {
 	switch v in p {
 	case ^Im_Widget_Textbox:
 		im_widget_textbox_destroy(v)
 	case ^Im_Widget_Button:
 		im_widget_button_destroy(v)
 	case ^Im_Widget_Text:
-		im_widget_text_destroy(v)
+		im_widget_text_destroy(node, v)
 	}
 }
 
-im_widget_dyn_draw :: proc(node: ^Im_Node, p: Im_Wrapper, render: Render) {
+im_widget_dyn_draw :: proc(render: Render, node: ^Im_Node, p: Im_Wrapper) {
 	switch v in p {
 	case nil:
 		// This is the most common case.
@@ -422,7 +426,7 @@ im_widget_replace :: proc(node: ^Im_Node, $T: typeid) -> (out: ^T, created: bool
 
 	if existing_t != typeid_of(^T) {
 		if existing_t != nil {
-			im_widget_dyn_destroy(existing)
+			im_widget_dyn_destroy(node, existing)
 			// Unions are data followed by tag. This cast is safe.
 			va.free_item(&im_state.widgets, (cast(^^Im_Wrapper_Anon)&existing)^)
 		}

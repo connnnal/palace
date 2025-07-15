@@ -562,3 +562,25 @@ test_custom_margin_padding_align :: proc(t: ^testing.T) {
 		}
 	}
 }
+
+// Custom (not from Yoga repo).
+// This ensures gaps count don't subtract from hypothetical available content size,
+// used in sizing %length nodes.
+@(test)
+test_custom_percent_padding :: proc(t: ^testing.T) {
+	root := new(Ly_Node, context.temp_allocator)
+	root.style.gap = 16
+	root.style.size = {1.0, 1.0}
+
+	root_child0 := new(Ly_Node, context.temp_allocator)
+	root_child0.style.size = {0.25, 0.25}
+	ly_node_insert(root, root_child0)
+
+	root_child1 := new(Ly_Node, context.temp_allocator)
+	root_child1.style.size = {0.5, 0.5}
+	root_child1.style.padding = 16
+	ly_node_insert(root, root_child1)
+
+	ly_compute_flexbox_layout(root, {2048, 2048})
+	yoga_validate(t, yoga_tree(root), {2048, 2048})
+}

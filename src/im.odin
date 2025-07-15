@@ -160,7 +160,7 @@ Im_Node :: struct {
 }
 
 im_node_reset :: proc(node: ^Im_Node) {
-	im_widget_dyn_destroy(node.wrapper)
+	im_widget_dyn_destroy(node, node.wrapper)
 }
 
 // Convenience wrapper over user-defined node properties.

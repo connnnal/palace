@@ -177,7 +177,7 @@ main :: proc() {
 
 		w.render_target->SetTextAntialiasMode(.CLEARTYPE)
 		for v in w.im.draws {
-			im_widget_dyn_draw(v, v.wrapper, render)
+			im_widget_dyn_draw(render, v, v.wrapper)
 		}
 	}
 

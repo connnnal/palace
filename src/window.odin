@@ -103,7 +103,7 @@ wind_init :: proc "contextless" () {
 				this.modifiers |= {.Ctrl}
 			case win.VK_MENU:
 				this.modifiers |= {.Alt}
-			case win.VK_LEFT, win.VK_RIGHT, win.VK_UP, win.VK_DOWN:
+			case win.VK_LEFT, win.VK_RIGHT, win.VK_UP, win.VK_DOWN, win.VK_DELETE:
 				append(&wind_state.events, In_Event{this, this.modifiers, u32(wparam)})
 			case:
 				break msg_opt
@@ -193,9 +193,9 @@ wind_init :: proc "contextless" () {
 
 				if r, _ := utf8.decode_rune(str); r != utf8.RUNE_ERROR {
 					append(&wind_state.events, In_Event{this, this.modifiers, r})
-					return 0
 				}
 			}
+			return 0
 		case win.WM_DROPFILES:
 			// TODO: Accept files, dropped links.
 			drop := transmute(win.HDROP)wparam
