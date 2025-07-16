@@ -87,7 +87,7 @@ Ly_Output :: struct {
 
 Ly_Node :: struct #min_field_align(64) {
 	using connections: struct {
-		parent, first, last, next, prev: ^Ly_Node,
+		first, last, next, prev: ^Ly_Node,
 	},
 	style:             Ly_Constants,
 	measure:           Ly_Output,
@@ -176,14 +176,15 @@ ly_inner :: proc(style: Ly_Constants, box: [2]i32) -> (out: [2]i32) #no_bounds_c
 
 ly_box :: proc(style: Ly_Constants, available: [2]Ly_Length, content: [2]i32) -> (out: [2]i32) #no_bounds_check {
 	return {
-		(ly_length(ly_evaluate_length(style.size[0], available[0])) or_else (content[0] + style.padding[0][0] + style.padding[0][1])),
-		(ly_length(ly_evaluate_length(style.size[1], available[1])) or_else (content[1] + style.padding[1][0] + style.padding[1][1])),
+		ly_length(ly_evaluate_length(style.size[0], available[0])) or_else (content[0] + style.padding[0][0] + style.padding[0][1]),
+		ly_length(ly_evaluate_length(style.size[1], available[1])) or_else (content[1] + style.padding[1][0] + style.padding[1][1]),
 	}
 }
 
 ly_position_flexbox :: proc(node: ^Ly_Node) {
 	mx, cx := ly_axes(node.style.flow)
 
+	// TODO: We could use SIMD swizzling here, with styles and measure as one vector.
 	node_inner_pos := [Ly_Axis]i32 {
 		.Main  = node.measure.pos[int(mx)] + node.style.padding[int(mx)][0],
 		.Cross = node.measure.pos[int(cx)] + node.style.padding[int(cx)][0],
@@ -304,7 +305,7 @@ ly_sizing_flexbox :: proc(node: ^Ly_Node, available: [2]Ly_Length) {
 			(child.style.absolute == false) or_continue
 			(child.style.grow == true) or_continue
 
-			// TODO: Setting size here is a hack.
+			// TODO: Passing size here is a hack.
 			available_inner[int(mx)] = Ly_Length(free_mx)
 			child.style.size[int(mx)] = 1.0
 
