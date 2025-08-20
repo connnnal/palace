@@ -6,5 +6,6 @@
 	"collections": [
 		{ "name": "src", "path": "src" },
 		{ "name": "lib", "path": "lib" },
+		{ "name": "build", "path": "build" }
 	]
 }

@@ -1,0 +1,196 @@
+shaders = [
+	{
+		name = "Root Signature"
+		source = "shaders/root_sig.hlsl"
+		lanes = [
+			{
+				name = "BASE"
+				tweaks = [
+					{ name = "APP", entry = "ENGINE_ROOT_SIG_GRAPHICS", profile = "rootsig_1_1" }
+				]
+			}
+		]
+	}
+	{
+		name = "Rect VS"
+		source = "shaders/rect.hlsl"
+		lanes = [
+			{
+				name = "BASE"
+				tweaks = [
+					{ name = "APP", entry = "vs_main", profile = "vs_6_6" }
+				]
+			}
+			{
+				name = "TEXTURE"
+				tweaks = [
+					{ name = "YES", defines = ["SPEC_TEXTURE"] }
+					{ name = "NO" }
+				]
+			}
+			{
+				name = "ROUNDED"
+				tweaks = [
+					{ name = "YES", defines = ["SPEC_ROUNDED"] }
+					{ name = "NO" }
+				]
+			}
+		]
+	}
+	{
+		name = "Rect PS"
+		source = "shaders/rect.hlsl"
+		lanes = [
+			{
+				name = "BASE"
+				tweaks = [
+					{ name = "APP", entry = "ps_main", profile = "ps_6_6" }
+				]
+			}
+			{
+				name = "TEXTURE"
+				tweaks = [
+					{ name = "YES", defines = ["SPEC_TEXTURE"] }
+					{ name = "NO" }
+				]
+			}
+			{
+				name = "ROUNDED"
+				tweaks = [
+					{ name = "YES", defines = ["SPEC_ROUNDED"] }
+					{ name = "NO" }
+				]
+			}
+			{
+				name = "GLASS"
+				tweaks = [
+					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_GLASS"] }
+				]
+			}
+		]
+	}
+	{
+		name = "AMD Single Pass Downsampler"
+		source = "shaders/ffx_spd.hlsl"
+		include = [
+			"lib/FidelityFX-SDK/sdk/include/FidelityFX/gpu"
+			"lib/FidelityFX-SDK/sdk/include/FidelityFX/gpu/spd"
+		]
+		lanes = [
+			// This base is applied to all AMD FFX shaders.
+			{
+				name = "BASE",
+				tweaks = [
+					{ name = "FFX", entry = "CS", defines = { FFX_GPU = "1", FFX_HLSL = "1" } }
+				]
+			}
+			{
+				name = "WIDTH",
+				tweaks = [
+					{ name = "F32" }
+					{ name = "F16", defines = { FX_HALF = "1" }, args = [ "-enable-16bit-types" ] }
+				]
+			}
+			{
+				name = "WAVE",
+				tweaks = [
+					{ name = "32", profile = "cs_6_2", defines = { FFX_HLSL_SM = "62" } }
+					{ name = "64", profile = "cs_6_6", defines = { FFX_HLSL_SM = "66", FFX_PREFER_WAVE64 = "[WaveSize(64)]" } }
+				]
+			}
+			// Specific to this shader.
+			{
+				name = "ROOTSIG",
+				tweaks = [
+					{ name = "EMBED", defines = [ "FFX_SPD_EMBED_ROOTSIG" ] }
+				]
+			}
+			{
+				name = "LINEAR_SAMPLE",
+				tweaks = [
+					{ name = "YE", defines = { FFX_SPD_OPTION_LINEAR_SAMPLE = "1" } }
+					// { name = "NO", defines = { FFX_SPD_OPTION_LINEAR_SAMPLE = "0" } }
+				]
+			}
+			{
+				name = "WAVE_INTEROP_LDS",
+				tweaks = [
+					{ name = "YE", defines = { FFX_SPD_OPTION_WAVE_INTEROP_LDS = "1" } }
+					{ name = "NO", defines = { FFX_SPD_OPTION_WAVE_INTEROP_LDS = "0" } }
+				]
+			}
+			{
+				name = "DOWNSAMPLE_FILTER",
+				tweaks = [
+					{ name = "0", defines = { FFX_SPD_OPTION_DOWNSAMPLE_FILTER = "0" } }
+					{ name = "1", defines = { FFX_SPD_OPTION_DOWNSAMPLE_FILTER = "1" } }
+					{ name = "2", defines = { FFX_SPD_OPTION_DOWNSAMPLE_FILTER = "2" } }
+				]
+			}
+		]
+	}
+	{
+		name = "AMD Blur"
+		source = "shaders/ffx_blur.hlsl"
+		include = [
+			"lib/FidelityFX-SDK/sdk/include/FidelityFX/gpu"
+			"lib/FidelityFX-SDK/sdk/include/FidelityFX/gpu/spd"
+		]
+		lanes = [
+			// This base is applied to all AMD FFX shaders.
+			{
+				name = "BASE",
+				tweaks = [
+					{ name = "FFX", entry = "CS", defines = { FFX_GPU = "1", FFX_HLSL = "1" } }
+				]
+			}
+			{
+				name = "WIDTH",
+				tweaks = [
+					{ name = "F32" }
+					{ name = "F16", defines = { FX_HALF = "1" }, args = [ "-enable-16bit-types" ] }
+				]
+			}
+			{
+				name = "WAVE",
+				tweaks = [
+					{ name = "32", profile = "cs_6_2", defines = { FFX_HLSL_SM = "62" } }
+					{ name = "64", profile = "cs_6_6", defines = { FFX_HLSL_SM = "66", FFX_PREFER_WAVE64 = "[WaveSize(64)]" } }
+				]
+			}
+			// Specific to this shader.
+			// {
+			// 	name = "ROOTSIG",
+			// 	tweaks = [
+			// 		{ name = "EMBED", defines = [ "FFX_SPD_EMBED_ROOTSIG" ] }
+			// 	]
+			// }
+			{
+				name = "KERNEL_DIMENSION",
+				tweaks = [
+					{ name = "3", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "3" } }
+					{ name = "5", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "5" } }
+					{ name = "7", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "7" } }
+					{ name = "9", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "9" } }
+					{ name = "11", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "11" } }
+					{ name = "13", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "13" } }
+					{ name = "15", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "15" } }
+					{ name = "17", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "17" } }
+					{ name = "19", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "19" } }
+					{ name = "21", defines = { FFX_BLUR_OPTION_KERNEL_DIMENSION = "21" } }
+				]
+			}
+			{
+				name = "KERNEL_PERMUTATION",
+				tweaks = [
+					{ name = "0", defines = { FFX_SPD_OPTION_KERNEL_PERMUTATION = "0" }, comment = "Sigma value of 1.6 used for generation of Gaussian kernel" }
+					{ name = "1", defines = { FFX_SPD_OPTION_KERNEL_PERMUTATION = "1" }, comment = "Sigma value of 2.8 used for generation of Gaussian kernel" }
+					{ name = "2", defines = { FFX_SPD_OPTION_KERNEL_PERMUTATION = "2" }, comment = "Sigma value of 4.0 used for generation of Gaussian kernel" }
+				]
+			}
+		]
+	}
+]
+
+out_dir = "build/shaders/"

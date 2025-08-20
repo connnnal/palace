@@ -1,61 +1,21 @@
 package main
 
-import "base:runtime"
-import "core:bytes"
 import "core:fmt"
-import "core:image"
-import "core:image/png"
 import "core:log"
 import "core:math/rand"
 
 import win "core:sys/windows"
-import d2w "lib:odin_d2d_dwrite"
 import "lib:superluminal"
 
+import "src:common"
+check :: common.check
+checkf :: common.checkf
+default_context :: common.default_context
+
+APP_NAME :: "Palace"
+
 Render :: struct {
-	target: ^d2w.ID2D1RenderTarget,
-	brush:  ^d2w.ID2D1SolidColorBrush,
-	bmp:    ^d2w.ID2D1BitmapBrush,
-}
-
-render_setup :: proc(render: ^Render, render_target: ^d2w.ID2D1RenderTarget) {
-	superluminal.InstrumentationScope("Rt Resources", color = superluminal.MAKE_COLOR(255, 0, 255))
-
-	render.target = render_target
-	render.target->AddRef()
-
-	img := image.load_from_bytes(#load("../rsc/paper-6-TEX.png"), {.alpha_add_if_missing}, context.temp_allocator) or_else log.panic("failed to load image")
-	bytes := bytes.buffer_to_bytes(&img.pixels)
-	defer image.destroy(img, context.temp_allocator)
-
-	IDENTITY := transmute(d2w.D2D_MATRIX_3X2_F)[6]f32{1, 0, 0, 1, 0, 0}
-	hr := render.target->CreateSolidColorBrush(&{}, &{1.0, IDENTITY}, &render.brush)
-	check(hr, "failed to create brush")
-
-	bitmap: ^d2w.ID2D1Bitmap
-	hr =
-	render.target->CreateBitmap(
-		{u32(img.width), u32(img.height)},
-		raw_data(bytes),
-		u32(img.width) * 4 * size_of(u8),
-		&{pixelFormat = {.R8G8B8A8_UNORM, .PREMULTIPLIED}},
-		&bitmap,
-	)
-	check(hr, "failed to create bitmap")
-	defer bitmap->Release()
-
-	IDENTITY = transmute(d2w.D2D_MATRIX_3X2_F)([6]f32{1, 0, 0, 1, 0, 0} * 0.28)
-	hr = render.target->CreateBitmapBrush(bitmap, &{.WRAP, .WRAP, .LINEAR}, &{0.15, IDENTITY}, &render.bmp)
-	check(hr, "failed to create bitmap brush")
-}
-
-render_reset :: proc(render: ^Render) {
-	if render^ != {} {
-		render.target->Release()
-		render.brush->Release()
-		render.bmp->Release()
-		render^ = {}
-	}
+	attach: ^Gfx_Attach,
 }
 
 Palette :: enum {
@@ -88,14 +48,9 @@ main :: proc() {
 
 	@(static) frame: int
 
-	@(static) render: Render
-	defer render_reset(&render)
-
 	update_callback :: proc(w: ^Window, area: [2]i32, dt: f32) {
 		superluminal.InstrumentationScope("Update", color = superluminal.MAKE_COLOR(0, 0, 255))
 
-		// Note that we avoid guarding the temporary allocator here.
-		// We may want to reference allocated memory in the paint callback.
 		defer frame += 1
 		frame := frame / 5
 
@@ -118,11 +73,13 @@ main :: proc() {
 							node := im_leaf(id("child", i), {size = {32, 32}, color = p[.Content]})
 							im_widget_text_bind(node, {.Body, .SEMI_BOLD, .NORMAL, 16 + i32((frame + i) % 4), fmt.tprintf("hi!!! %v", frame)})
 						}
-						node := im_leaf(id("foo4"), {color = p[.Content]})
-						if true || frame % 60 > 30 {
+						{
+							node := im_leaf(id("foo4"), {color = p[.Content]})
 							im_widget_text_bind(node, {.Special, .SEMI_BOLD, .NORMAL, 64, "hiya!!!!!!!!!!!!!!!!!!!!!!!"})
-						} else {
-							// _ = im_widget_hydrate(w, &w.im, node, Im_Widget_Button, dt)
+						}
+						{
+							node := im_leaf(id("foo5"), {color = p[.Content]})
+							im_widget_text_bind(node, {.Special, .SEMI_BOLD, .NORMAL, 32, "0123456789"})
 						}
 						// im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
 						// im_leaf(id("foo3"), {color = p[.Midground], text = Text_Desc{.Special, .SEMI_BOLD, .NORMAL, 32, "okay"}})
@@ -159,26 +116,20 @@ main :: proc() {
 			wind_events_pop(&it)
 		}
 	}
-	paint_callback :: proc(w: ^Window, recreate: bool) {
+	paint_callback :: proc(w: ^Window) {
 		superluminal.InstrumentationScope("Paint", color = superluminal.MAKE_COLOR(255, 0, 0))
-
-		// There is no subesquent step after this, it's safe to guard the allocator.
-		// Ideal as this callback can re-run per "frame".
-		runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
-
-		if recreate {
-			render_reset(&render)
-			render_setup(&render, w.render_target)
-		}
 
 		// TODO: I dislike this here. Paint should have no knowledge of the simulation.
 		im_ctx_enter(&w.im)
 		defer im_ctx_exit(&w.im)
 
-		w.render_target->SetTextAntialiasMode(.CLEARTYPE)
+		render := Render{w.attach}
+
 		for v in w.im.draws {
 			im_widget_dyn_draw(render, v, v.wrapper)
 		}
+
+		gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {1, 0, 1, 1}, {}, rounding = 32, rounding_corners = {true, true, true, true}, test = true)
 	}
 
 	wind_open(&w)

@@ -8,7 +8,7 @@ import text_edit "core:text/edit"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
-import va "lib:virtual_array"
+import va "src:virtual_array"
 
 handle_char_input :: proc(box: ^text_edit.State, codepoint: rune) {
 	switch codepoint {
@@ -88,7 +88,7 @@ Im_Widget_Textbox :: struct #no_copy {
 	builder:                 strings.Builder,
 	trailing_hit, is_inside: win.BOOL,
 	text:                    Text_Layout_State,
-	selecting:               bool,
+	dragging:                bool,
 	hot:                     f32,
 }
 im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widget_Textbox {
@@ -131,11 +131,11 @@ im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widge
 
 			inside := im_in_box(node.measure, inner.pos)
 
-			if inner.down {
-				this.selecting = inside
-				// TODO: This isn't compatible with other elements!!
-				im_state.focus = inside ? node.id : 0
+			switch inner.type {
+			case .Down, .Drag_Start, .Double:
 				if inside {
+					im_state.focus = node.id
+
 					defer wind_events_pop(&it)
 
 					layout := text_state_get_valid_layout(&this.text) or_continue
@@ -150,7 +150,11 @@ im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widge
 					)
 					win.SUCCEEDED(hr) or_continue
 
-					if inner.double {
+					if inner.type == .Drag_Start {
+						this.dragging = true
+					}
+
+					if inner.type == .Double {
 						blip_loc := metrics.textPosition
 						this.box.selection = {int(blip_loc), int(blip_loc)}
 
@@ -161,16 +165,18 @@ im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widge
 						this.box.selection = {int(blip_loc), int(blip_loc)}
 					}
 				} else {
+					// TODO: This isn't compatible with other elements!!
+					if im_state.focus == node.id {
+						im_state.focus = 0
+					}
 					this.box.selection = {this.box.selection[0], this.box.selection[0]}
 				}
-			} else {
-				if this.selecting {
-					defer wind_events_pop(&it)
-					this.selecting = false
-				}
+			case .Drag_End:
+				this.dragging = false
+			case .Up:
 			}
 		case In_Move:
-			(this.selecting) or_continue
+			(this.dragging) or_continue
 			defer wind_events_pop(&it)
 
 			layout := text_state_get_valid_layout(&this.text) or_continue
@@ -189,7 +195,9 @@ im_widget_textbox_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widge
 	text_state_hydrate(&this.text, Text_Desc{.Body, .THIN, .ITALIC, 96, str})
 	text_state_cache(&this.text, {f32(node.measure.size.x), f32(node.measure.size.y)})
 
-	im_hot(node.measure, w.mouse, dt, &this.hot)
+	if im_hot(node.measure, w.mouse, dt, &this.hot) {
+		w.enable_drag = true
+	}
 
 	node.style.size = {1.0, 256}
 	node.color = {0, 0, 0.5 + 0.5 * this.hot, 1}
@@ -204,14 +212,8 @@ im_widget_textbox_destroy :: proc(this: ^Im_Widget_Textbox) {
 im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Textbox) {
 	im_widget_none_draw(render, node)
 
-	rect := d2w.D2D_RECT_F {
-		f32(node.measure.pos.x),
-		f32(node.measure.pos.y),
-		f32(node.measure.size.x + node.measure.pos.x),
-		f32(node.measure.size.y + node.measure.pos.y),
-	}
-	render.target->PushAxisAlignedClip(&rect, .PER_PRIMITIVE)
-	defer render.target->PopAxisAlignedClip()
+	// render.target->PushAxisAlignedClip(&rect, .PER_PRIMITIVE)
+	// defer render.target->PopAxisAlignedClip()
 
 	hr: win.HRESULT
 	{
@@ -237,9 +239,7 @@ im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_
 			win.SUCCEEDED(hr) or_break drag
 
 			for test in hit_test[:hit_test_count] {
-				rect := d2w.D2D_RECT_F{test.left, test.top, test.left + test.width, test.top + test.height}
-				render.brush->SetColor(auto_cast &{1, 1, 1, 0.6})
-				render.target->FillRoundedRectangle(&{rect, 4, 4}, render.brush)
+				gfx_attach_draw(render.attach, {test.left, test.top}, {test.width, test.height}, {1, 1, 1, 0.6})
 			}
 		}
 
@@ -261,19 +261,14 @@ im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_
 				height = metrics.height
 			}
 
-			pos := [2]f32{f32(node.measure.pos.x), f32(node.measure.pos.y)} + offset
-			rect := d2w.D2D_RECT_F{pos.x, pos.y, pos.x + 4, pos.y + height}
-			render.brush->SetColor(auto_cast &{0, 1, 0, 1})
-			render.target->FillRectangle(&rect, render.brush)
+			gfx_attach_draw(render.attach, {f32(node.measure.pos.x), f32(node.measure.pos.y)} + offset, {4, height}, {0, 1, 0, 1})
 		}
 	}
 
 	str := strings.to_string(this.builder)
 	layout, layout_ok := text_state_get_valid_layout(&this.text)
 	text: if len(str) > 0 && layout_ok {
-		point := d2w.D2D_POINT_2F{f32(node.measure.pos.x), f32(node.measure.pos.y)}
-		render.brush->SetColor(auto_cast &{1, 1, 1, im_state.focus == node.id ? 1 : 0.5})
-		render.target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
+		layout->Draw(&Glyph_Draw_Meta{render, {1, 1, 1, im_state.focus == node.id ? 1 : 0.5}}, &glyph_renderer, f32(node.measure.pos.x), f32(node.measure.pos.y))
 	}
 }
 
@@ -293,13 +288,7 @@ im_widget_button_bind :: proc(node: ^Im_Node, w: ^Window, dt: f32) -> ^Im_Widget
 im_widget_button_destroy :: proc(this: ^Im_Widget_Button) {
 }
 im_widget_button_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Button) {
-	rect := d2w.D2D1_ROUNDED_RECT {
-		{f32(node.measure.pos.x), f32(node.measure.pos.y), f32(node.measure.size.x + node.measure.pos.x), f32(node.measure.size.y + node.measure.pos.y)},
-		8,
-		8,
-	}
-	render.brush->SetColor(auto_cast &node.color)
-	render.target->FillRoundedRectangle(&rect, render.brush)
+	gfx_attach_draw(render.attach, {f32(node.measure.pos.x), f32(node.measure.pos.y)}, {f32(node.measure.size.x), f32(node.measure.size.y)}, node.color)
 }
 
 
@@ -335,9 +324,7 @@ im_widget_text_bind :: proc(node: ^Im_Node, desc: Text_Desc) {
 im_widget_text_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Text) {
 	text: {
 		layout := text_state_get_valid_layout(&this.text) or_break text
-		point := d2w.D2D_POINT_2F{f32(node.measure.pos.x), f32(node.measure.pos.y)}
-		render.brush->SetColor(auto_cast &p[.Text])
-		render.target->DrawTextLayout(point, layout, render.brush, d2w.D2D1_DRAW_TEXT_OPTIONS{.ENABLE_COLOR_FONT})
+		layout->Draw(&Glyph_Draw_Meta{render, p[.Text]}, &glyph_renderer, f32(node.measure.pos.x), f32(node.measure.pos.y))
 	}
 }
 im_widget_text_destroy :: proc(node: ^Im_Node, this: ^Im_Widget_Text) {
@@ -347,19 +334,14 @@ im_widget_text_destroy :: proc(node: ^Im_Node, this: ^Im_Widget_Text) {
 
 // Default (no widget).
 im_widget_none_draw :: proc(render: Render, node: ^Im_Node) {
-	rect := d2w.D2D_RECT_F {
-		f32(node.measure.pos.x),
-		f32(node.measure.pos.y),
-		f32(node.measure.size.x + node.measure.pos.x),
-		f32(node.measure.size.y + node.measure.pos.y),
-	}
-	render.brush->SetColor(auto_cast &node.color)
-	if node.color == p[.Background] {
-		render.target->FillRectangle(&rect, render.brush)
-		render.target->FillRectangle(&rect, render.bmp)
-	} else {
-		render.target->FillRectangle(&rect, render.brush)
-	}
+	// render.brush->SetColor(auto_cast &node.color)
+	// if node.color == p[.Background] {
+	// 	render.target->FillRectangle(&rect, render.brush)
+	// 	render.target->FillRectangle(&rect, render.bmp)
+	// } else {
+	// 	render.target->FillRectangle(&rect, render.brush)
+	// }
+	gfx_attach_draw(render.attach, {f32(node.measure.pos.x), f32(node.measure.pos.y)}, {f32(node.measure.size.x), f32(node.measure.size.y)}, node.color)
 }
 
 Im_Wrapper :: union {

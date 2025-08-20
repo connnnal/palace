@@ -1,0 +1,233 @@
+#include "common.hlsl"
+
+struct InputVs {
+	float4             rect  : RECT;
+	row_major float4x4 color : COLOR;
+	float4             texc  : TEXC;
+	uint4              pack  : PACK;
+	uint               id    : SV_VertexID;
+};
+struct InputPs {
+                    float4 pos        : SV_Position;
+                    float4 color      : COLOR;
+#ifdef SPEC_TEXTURE
+                    float2 tex        : TEXCOORD0;
+#endif
+#ifdef SPEC_ROUNDED
+    nointerpolation float2 shape_size : CSIZE;
+	                float2 shape_uv   : UVSHAPE;
+#endif
+					uint4  pack       : PACK;
+};
+
+InputPs vs_main(InputVs input)
+{
+    InputPs output;
+
+	float2 uv = float2(
+		(input.id & 1) ? 1.0f : 0.0f,
+		(input.id > 1) ? 1.0f : 0.0f
+	);
+
+	float2 shape_size = input.rect.yw;
+
+	float4 pos = float4(
+		input.rect.x + input.rect.y * uv.x,
+		input.rect.z + input.rect.w * uv.y,
+		0,
+		1
+	);
+	pos.x *= drawConstants.viewport_inv.x;
+	pos.y *= drawConstants.viewport_inv.y;
+	pos.y = 1 - pos.y;
+	pos.x = (pos.x - 0.5f) * 2.0f;
+	pos.y = (pos.y - 0.5f) * 2.0f;
+	pos.z = asfloat((input.pack.y & 0x0FFFFFFF) + 0x800000);
+	output.pos = pos;
+	
+	// TODO: Faster than dynamic indexing?
+	// TODO: Multiplying all columns before addition may be faster beacuse of latency hiding.
+	float4 color = 0;
+	color += (input.id == 0 ? input.color[0] : 0.0f);
+	color += (input.id == 1 ? input.color[1] : 0.0f);
+	color += (input.id == 2 ? input.color[2] : 0.0f);
+	color += (input.id == 3 ? input.color[3] : 0.0f);
+	output.color = float4(color.xyz * color.a, color.a);
+
+#ifdef SPEC_TEXTURE
+	float4 tex = float4(
+		input.texc.x + input.texc.y * uv.x,
+		input.texc.z + input.texc.w * uv.y,
+		0,
+		1
+	);
+	output.tex = tex.xy;
+#endif
+
+#if defined(SPEC_ROUNDED)
+	float softness = (1/asfloat(input.pack.w))-1;
+	float inset = -softness;
+	float2 fac = (inset / 2) / shape_size;
+
+	output.shape_size = shape_size + inset;
+	output.shape_uv = uv + fac - fac*2*uv;
+#endif
+
+	output.pack = input.pack;
+
+    return output;
+}
+
+//
+// https://iquilezles.org/articles/roundedboxes/.
+// https://www.shadertoy.com/view/4cG3R1.
+//
+
+float sdCornerCircle( float2 p )
+{
+    return length(p-float2(0.0,-1.0)) - sqrt(2.0);
+}
+
+float sdCornerParabola( float2 p )
+{
+    // https://www.shadertoy.com/view/ws3GD7
+    float y = (0.5 + p.y)*(2.0/3.0);
+    float h = p.x*p.x + y*y*y;
+    float w = pow( p.x + sqrt(abs(h)), 1.0/3.0 ); // note I allow a tiny error in the very interior of the shape so that I don't have to branch into the 3 root solution
+    float x = w - y/w;
+    float2  q = float2(x,0.5*(1.0-x*x));
+    return length(p-q)*sign(p.y-q.y);
+}
+
+float sdCornerCosine( float2 uv )
+{
+    // https://www.shadertoy.com/view/3t23WG
+	const float kT = 6.28318531;
+    uv *= (kT/4.0);
+
+    float ta = 0.0, tb = kT/4.0;
+    for( int i=0; i<8; i++ )
+    {
+        float t = 0.5*(ta+tb);
+        float y = t-uv.x+(uv.y-cos(t))*sin(t);
+        if( y<0.0 ) ta = t; else tb = t;
+    }
+    float2  qa = float2(ta,cos(ta)), qb = float2(tb,cos(tb));
+    float2  pa = uv-qa;
+	float2 di = qb-qa;
+    float h = clamp( dot(pa,di)/dot(di,di), 0.0, 1.0 );
+    return length(pa-di*h) * sign(pa.y*di.x-pa.x*di.y) * (4.0/kT);
+}
+
+float sdCornerCubic( float2 uv )
+{
+    float ta = 0.0, tb = 1.0;
+    for( int i=0; i<12; i++ )
+    {
+        float t = 0.5*(ta+tb);
+        float c = (t*t*(t-3.0)+2.0)/3.0;
+        float dc = t*(t-2.0);
+        float y = (uv.x-t) + (uv.y-c)*dc;
+        if( y>0.0 ) ta = t; else tb = t;
+    }
+    float2  qa = float2(ta,(ta*ta*(ta-3.0)+2.0)/3.0);
+    float2  qb = float2(tb,(tb*tb*(tb-3.0)+2.0)/3.0);
+    float2  pa = uv-qa, di = qb-qa;
+    float h = clamp( dot(pa,di)/dot(di,di),0.0,1.0 );
+    return length(pa-di*h) * sign(pa.y*di.x-pa.x*di.y);
+}
+
+float sdRoundBox( float2 p, float2 b, float4 r, int type )
+{
+    // select corner radius
+    r.xy = (p.x>0.0)?r.xy : r.zw;
+    r.x  = (p.y>0.0)?r.x  : r.y;
+    // box coordinates
+    float2 q = abs(p)-b+r.x;
+    // distance to sides
+    if( min(q.x,q.y)<0.0 ) return max(q.x,q.y)-r.x;
+    // rotate 45 degrees, offset by r and scale by r*sqrt(0.5) to canonical corner coordinates
+    float2 uv = float2( abs(q.x-q.y), q.x+q.y-r.x )/r.x;
+    // compute distance to corner shape
+    float d;
+         if( type==0 ) d = sdCornerCircle( uv );
+    else if( type==1 ) d = sdCornerParabola( uv );
+    else if( type==2 ) d = sdCornerCosine( uv );
+    else if( type==3 ) d = sdCornerCubic( uv );
+    // undo scale
+    return d * r.x*sqrt(0.5);
+}
+
+//
+// https://julhe.github.io/posts/always_sharp_sdf_textures/.
+//
+
+//inverse of lerp(), you can also use smoothstep() if you want to.
+#define inverseLerp(a,b,x) ((x-a)/(b-a))
+
+// Good enough for most cases. Can show up minor artifacts on step triangles
+half FilterSdfTextureApproximative(half sdf, float2 uvCoordinate, half2 textureSize) {
+    half2 pixelAreaRect = fwidth(uvCoordinate) * textureSize; // calculate the area under the pixel
+    half texelCoverage = saturate(min(pixelAreaRect.x, pixelAreaRect.y));
+    return saturate(inverseLerp(-texelCoverage, texelCoverage, sdf));
+}
+
+// exact version
+half FilterSdfTextureExact(half sdf, float2 uvCoordinate, half2 textureSize) {
+    // calculate the derrivate of the UV coordinate and build a parallelogramm from it
+    half2x2 pixelFootprint = half2x2(ddx(uvCoordinate), ddy(uvCoordinate));
+    half pixelFootprintDiameterSqr = abs(determinant(pixelFootprint)); 
+    pixelFootprintDiameterSqr *= textureSize.x * textureSize.y ;
+    float pixelFootprintDiameter = sqrt(pixelFootprintDiameterSqr);
+    // clamp the filter width to [0, 1] so we won't overfilter, which fades the texture into grey
+    pixelFootprintDiameter = saturate(pixelFootprintDiameter) ; 
+    return saturate(inverseLerp(-pixelFootprintDiameter, pixelFootprintDiameter, sdf));
+}
+
+float4 ps_main(InputPs input) : SV_Target
+{
+	float4 color = input.color;
+
+	uint4 pack = input.pack;
+	uint texi = pack.x;
+	uint4 corner = float4(
+		((pack.y >> 28) & 1) ? asfloat(pack.z) : 0.0f,
+		((pack.y >> 29) & 1) ? asfloat(pack.z) : 0.0f,
+		((pack.y >> 30) & 1) ? asfloat(pack.z) : 0.0f,
+		((pack.y >> 31) & 1) ? asfloat(pack.z) : 0.0f
+	);
+	float softness = asfloat(pack.w);
+
+#ifdef SPEC_TEXTURE
+	if (texi != 0xFFFFFFFF) {
+	    Texture2D texture = ResourceDescriptorHeap[NonUniformResourceIndex(texi)];
+	    color *= texture.Sample(sampler_wrap_point, input.tex);
+	}
+#endif
+
+#ifdef SPEC_ROUNDED
+	float dist = sdRoundBox((input.shape_uv*2-1)*input.shape_size, input.shape_size, corner, 1);
+	float alpha = FilterSdfTextureApproximative(-dist * softness, input.shape_uv, input.shape_size);
+	if (softness < 0.5) {
+		alpha = smoothstep(0,1,alpha);
+	}
+	color *= alpha;
+#endif
+
+#ifdef SPEC_GLASS
+	Texture2D texture_prev = ResourceDescriptorHeap[drawConstants.accum_idx];
+	float3 accum = 0;
+	float power = 1;
+	for (int i = 0; i < 1; i++) {
+		accum += texture_prev.SampleLevel(sampler_wrap_linear, input.pos.xy * drawConstants.viewport_inv, i).xyz * power;
+	}
+	accum /= float(1);
+	color.xyz *= accum;
+#endif
+
+#ifdef SPEC_DEBUG
+	color = float4(color.a, color.a, color.a, 1.0);
+#endif
+
+    return float4(color.xyz, color.a);
+}

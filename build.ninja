@@ -1,0 +1,18 @@
+exe_dxc = lib/microsoft.direct3d.dxc.1.8.2505.32/build/native/bin/x64/dxc.exe
+dir_shaders = shaders
+
+rule dxc
+  command = $exe_dxc -T $type -E $entry -Fo $out $in
+  restat = 1
+
+build $dir_shaders/root_sig.bin : dxc $dir_shaders/root_sig.hlsl
+  type = rootsig_1_1
+  entry = ENGINE_ROOT_SIG_GRAPHICS
+
+build $dir_shaders/rect_vs.bin : dxc $dir_shaders/rect.hlsl
+  type = vs_6_6
+  entry = vs_main
+
+build $dir_shaders/rect_ps.bin : dxc $dir_shaders/rect.hlsl
+  type = ps_6_6
+  entry = ps_main

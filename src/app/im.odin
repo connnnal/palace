@@ -12,7 +12,7 @@ import "core:mem/tlsf"
 import "core:strings"
 
 import "lib:superluminal"
-import va "lib:virtual_array"
+import va "src:virtual_array"
 
 Id :: u32
 
@@ -142,7 +142,7 @@ im_draws :: proc(state: ^Im_State, node: ^Im_Node) {
 			queue.push_back(&q, cast(^Im_Node)node)
 		}
 
-		node = queue.pop_front_safe(&q) or_break
+		node = queue.pop_back_safe(&q) or_break
 	}
 }
 
@@ -228,10 +228,11 @@ im_in_box :: #force_inline proc "contextless" (measure: Ly_Output, mouse: [2]i32
 }
 
 // TODO: Ideally this is template-ised on the "mouse_ok" param.
-im_hot :: proc(measure: Ly_Output, mouse: Maybe([2]i32), dt: f32, hot: ^f32) {
+im_hot :: proc(measure: Ly_Output, mouse: Maybe([2]i32), dt: f32, hot: ^f32) -> bool {
 	mouse, mouse_ok := mouse.?
 	in_bounds := mouse_ok && im_in_box(measure, mouse)
 	hot^ = exp_decay(hot^, in_bounds ? 1 : 0, 28, dt)
+	return in_bounds
 }
 
 im_dump :: proc(node: ^Im_Node, allocator := context.temp_allocator) -> string {
@@ -251,11 +252,11 @@ im_dump :: proc(node: ^Im_Node, allocator := context.temp_allocator) -> string {
 		// Visit.
 		{
 			for _ in 0 ..< depth {fmt.sbprint(&b, "\t")}
-			fmt.sbprintf(&b, "%#x\n", node.id)
+			fmt.sbprintfln(&b, "%#x", node.id)
 			for _ in 0 ..< depth {fmt.sbprint(&b, "\t")}
-			fmt.sbprintf(&b, "size: %v\n", node.measure.size)
+			fmt.sbprintfln(&b, "size: %v", node.measure.size)
 			for _ in 0 ..< depth {fmt.sbprint(&b, "\t")}
-			fmt.sbprintf(&b, "pos: %v\n", node.measure.pos)
+			fmt.sbprintfln(&b, "pos: %v", node.measure.pos)
 		}
 		// Children.
 		append(&stack, cast(^Im_Node)node.next)

@@ -1,6 +1,7 @@
 package main
 
 import "base:intrinsics"
+import "core:bytes"
 import "core:hash"
 import "core:log"
 import "core:os/os2"
@@ -8,6 +9,7 @@ import "core:strings"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
+import "lib:superluminal"
 
 Text_Typeface :: enum {
 	Body,
@@ -31,6 +33,8 @@ text_state: struct {
 
 @(init)
 text_init :: proc "contextless" () {
+	superluminal.InstrumentationScope("Text Init", color = superluminal.MAKE_COLOR(0, 255, 0))
+
 	context = default_context()
 
 	text_state.names = {
@@ -141,7 +145,7 @@ text_state_cache :: proc(state: ^Text_Layout_State, available: [2]f32) -> (layou
 		}
 		if invalid {
 			hr := text_state.factory->CreateTextFormat(
-				text_state.names[props.typeface],
+				cast(^win.WCHAR)text_state.names[props.typeface],
 				text_state.collection,
 				props.font_weight,
 				.NORMAL,
@@ -156,7 +160,6 @@ text_state_cache :: proc(state: ^Text_Layout_State, available: [2]f32) -> (layou
 
 	// Text layout.
 	{
-		available: [2]f32 = {f32(available[0]), f32(available[1])}
 		hash := hash.fnv64a(transmute([]byte)state.contents)
 
 		destroy, recreate: bool

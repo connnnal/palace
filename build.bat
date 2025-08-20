@@ -4,10 +4,28 @@ SETLOCAL
 
 FOR %%a IN (%*) DO SET "%%a=1"
 
+:: Flags for visual applications.
+SET app_vis_flags=
+IF "%-window%"=="1" (
+	SET app_vis_flags=%app_vis_flags% -subsystem:windows
+)
+
+:: Flags for applications.
+SET app_flags=
+IF "%-retail"=="1" (
+	SET app_flags=%app_flags% -source-code-locations:obfuscated
+)
+IF "%-no-crt%"=="1" (
+	SET app_flags=%app_flags% -no-crt
+)
+IF "%-instrument%"=="1" (
+	SET app_flags=%app_flags% -define:USE_PERFORMANCEAPI_INSTRUMENTATION=true -extra-linker-flags:"/ignore:4099"
+)
+
 :: Flags for all binaries.
 SET all_flags=
 IF NOT "%-nocollections%"=="1" (
-	SET all_flags=%all_flags% -collection:src=src -collection:lib=lib
+	SET all_flags=%all_flags% -collection:src=src -collection:lib=lib -collection:build=build
 )
 IF "%-vet%"=="1" (
 	SET all_flags=%all_flags% -vet
@@ -20,10 +38,11 @@ IF NOT "%-allowdo%"=="1" (
 )
 IF "%-release%"=="1" (
 	ECHO [release mode]
-	SET all_flags=%all_flags% -o:speed
+	SET all_flags=%all_flags% -o:speed -debug
 ) ELSE (
 	ECHO [debug mode]
 	SET all_flags=%all_flags% -debug
+	SET app_vis_flags=%app_vis_flags% -define:USE_GFX_DEBUG=true
 )
 IF "%-show-timings%"=="1" (
 	SET all_flags=%all_flags% -show-timings
@@ -32,24 +51,9 @@ IF "%-show-system-calls%"=="1" (
 	SET all_flags=%all_flags% -show-system-calls
 )
 IF "%-retail%"=="1" (
-	SET all_flags=%all_flags% -microarch:native
-) ELSE (
 	SET all_flags=%all_flags% -microarch:ivybridge
-)
-
-:: Flags for shipped visual applications.
-SET app_flags=
-IF "%-window%"=="1" (
-	SET app_flags=%app_flags% -subsystem:windows
-)
-IF "%-retail"=="1" (
-	SET app_flags=%app_flags% -source-code-locations:obfuscated
-)
-IF "%-no-crt%"=="1" (
-	SET app_flags=%app_flags% -no-crt
-)
-IF "%-instrument%"=="1" (
-	SET app_flags=%app_flags% -define:USE_PERFORMANCEAPI_INSTRUMENTATION=true -extra-linker-flags:"/ignore:4099"
+) ELSE (
+	SET all_flags=%all_flags% -microarch:native
 )
 
 :: Targets
@@ -58,5 +62,12 @@ IF "%-test%"=="1" (
 )
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
-odin build src -out:palace.exe %all_flags% %app_flags%
+IF "%shadert%"=="1" (
+	odin build src/shadert -out:shadert.exe %all_flags% %app_flags% -keep-executable
+)
+IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
+
+IF "%app%"=="1" (
+	odin build src/app -out:palace.exe %all_flags% %app_flags% %app_vis_flags% -keep-executable
+)
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%

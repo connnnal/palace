@@ -3,8 +3,11 @@
 /*.dll
 *.rdi
 *.bin
+.ninja_log
+.hash_log
 
 build/
 bin/
 
 lib/yoga/
+lib/FidelityFX-SDK/

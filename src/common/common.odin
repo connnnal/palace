@@ -1,4 +1,4 @@
-package main
+package common
 
 import "base:runtime"
 import "core:log"

@@ -48,7 +48,7 @@ SuppressTailCallOptimization :: struct {
  * The resulting color can be passed to the BeginEvent function.
  */
 @(no_instrumentation)
-MAKE_COLOR :: #force_inline proc(r, g, b: u8) -> u32 {
+MAKE_COLOR :: #force_inline proc "contextless" (r, g, b: u8) -> u32 {
 	return transmute(u32)[4]u8{0xFF, b, g, r}
 }
 

@@ -1,12 +1,19 @@
 package main
 
+import "base:runtime"
 import "core:log"
 import "core:mem"
 import "core:time"
 import "core:unicode/utf8"
 
 import win "core:sys/windows"
-import d2w "lib:odin_d2d_dwrite"
+
+foreign import user32 "system:User32.lib"
+
+@(private, default_calling_convention = "system")
+foreign user32 {
+	DragDetect :: proc(hwnd: win.HWND, pt: win.POINT) -> win.BOOL ---
+}
 
 // https://learn.microsoft.com/en-us/windows/win32/direct2d/improving-direct2d-performance.
 // https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/may/windows-with-c-introducing-direct2d-1-1#connecting-the-device-context-and-swap-chain.
@@ -17,8 +24,8 @@ CLASS_NAME :: APP_NAME + "Main"
 
 wind_state: struct {
 	instance: win.HINSTANCE,
-	factory:  ^d2w.ID2D1Factory5,
 	events:   [dynamic]In_Event,
+	bg:       win.HBRUSH,
 }
 
 In_Modifier :: enum {
@@ -38,9 +45,16 @@ In_Move :: struct {
 	pos: [2]i32,
 }
 
+In_Click_Type :: enum {
+	Up,
+	Down,
+	Double,
+	Drag_Start,
+	Drag_End,
+}
+
 In_Click :: struct {
-	down:   bool,
-	double: bool,
+	type:   In_Click_Type,
 	button: In_Button,
 	pos:    [2]i32,
 }
@@ -58,41 +72,52 @@ In_Event :: struct {
 
 Window :: struct #no_copy {
 	wnd:             win.HWND,
-	render_target:   ^d2w.ID2D1HwndRenderTarget,
+	attach:          ^Gfx_Attach,
 	update_callback: proc(w: ^Window, area: [2]i32, dt: f32),
-	paint_callback:  proc(w: ^Window, recreate: bool),
-	painted_ok:      bool,
-	area:            [2]i32,
-	im:              Im_State,
-	high_surrogate:  win.WCHAR,
-	modifiers:       In_Modifiers,
-	mouse:           Maybe([2]i32),
-	mouse_tracking:  win.BOOL,
+	paint_callback:  proc(w: ^Window),
 	last_paint:      time.Tick,
+	area:            [2]i32,
+	using input:     Window_Input,
+	im:              Im_State,
+}
+
+Window_Input :: struct #no_copy {
+	high_surrogate: win.WCHAR,
+	modifiers:      In_Modifiers,
+	mouse:          Maybe([2]i32),
+	mouse_tracking: win.BOOL,
+	enable_drag:    win.BOOL,
+	captured:       bool,
 }
 
 @(init)
 wind_init :: proc "contextless" () {
 	context = default_context()
 
-	hr: win.HRESULT
-
 	wind_state.instance = win.HINSTANCE(win.GetModuleHandleW(nil))
 	log.assert(wind_state.instance != nil, "failed to get instance")
 
 	wind_state.events.allocator = context.allocator
 
+	wind_state.bg = win.CreateSolidBrush(win.RGB(100, 118, 140))
+
 	wc: win.WNDCLASSEXW
 	callback :: proc "system" (wnd: win.HWND, msg: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) -> win.LRESULT {
 		context = default_context()
 
-		this := transmute(^Window)win.GetWindowLongPtrW(wnd, win.GWLP_USERDATA)
-
-		msg_opt: switch msg {
-		case win.WM_CREATE:
+		if msg == win.WM_CREATE {
 			create_params := transmute(^win.CREATESTRUCTW)lparam
 			this := transmute(win.LONG_PTR)create_params.lpCreateParams
 			win.SetWindowLongPtrW(wnd, win.GWLP_USERDATA, this)
+			return 0
+		}
+
+		this := transmute(^Window)win.GetWindowLongPtrW(wnd, win.GWLP_USERDATA)
+		if this == nil {
+			return win.DefWindowProcW(wnd, msg, wparam, lparam)
+		}
+
+		msg_opt: switch msg {
 		case win.WM_KEYDOWN:
 			switch wparam {
 			case win.VK_ESCAPE:
@@ -129,22 +154,42 @@ wind_init :: proc "contextless" () {
 				this.mouse_tracking = win.TrackMouseEvent(&{size_of(win.TRACKMOUSEEVENT), win.TME_LEAVE, wnd, win.HOVER_DEFAULT})
 			}
 			append(&wind_state.events, In_Event{this, this.modifiers, In_Move{pos}})
+			return 0
 		case win.WM_LBUTTONDOWN, win.WM_LBUTTONUP, win.WM_RBUTTONDOWN, win.WM_RBUTTONUP, win.WM_LBUTTONDBLCLK:
 			click: In_Click
 			switch msg {
 			case win.WM_LBUTTONDBLCLK:
-				click.double = true
-				fallthrough
-			case win.WM_LBUTTONDOWN:
-				click.down = true
-				fallthrough
-			case win.WM_LBUTTONUP:
+				click.type = .Double
 				click.button = .Left
-			case win.WM_RBUTTONDOWN:
-				click.down = true
-				fallthrough
-			case win.WM_RBUTTONUP:
+			case win.WM_LBUTTONDOWN:
+				click.type = .Down
+				click.button = .Left
+			case win.WM_LBUTTONUP:
+				click.type = .Up
+				click.button = .Left
+			case win.WM_RBUTTONDBLCLK:
+				click.type = .Double
 				click.button = .Right
+			case win.WM_RBUTTONDOWN:
+				click.type = .Down
+				click.button = .Right
+			case win.WM_RBUTTONUP:
+				click.type = .Up
+				click.button = .Right
+			}
+
+			if msg == win.WM_LBUTTONDOWN && this.enable_drag {
+				if DragDetect(wnd, {win.GET_X_LPARAM(lparam), win.GET_Y_LPARAM(lparam)}) {
+					this.captured = true
+					click.type = .Drag_Start
+					win.SetCapture(wnd)
+				}
+			} else {
+				if this.captured && msg == win.WM_LBUTTONUP {
+					this.captured = false
+					click.type = .Drag_End
+					win.ReleaseCapture()
+				}
 			}
 
 			click.pos = [2]i32{win.GET_X_LPARAM(lparam), win.GET_Y_LPARAM(lparam)}
@@ -154,21 +199,13 @@ wind_init :: proc "contextless" () {
 		case win.WM_MOUSELEAVE:
 			this.mouse = nil
 			this.mouse_tracking = win.FALSE
+			return 0
 		case win.WM_SIZE:
-			(this != nil) or_break
-
 			c_rect: win.RECT
 			win.GetClientRect(wnd, &c_rect) or_break
 			this.area = {c_rect.right - c_rect.left, c_rect.bottom - c_rect.top}
 
-			this.render_target->Resize(&{u32(this.area.x), u32(this.area.y)})
-
-			fallthrough
-		case win.WM_PAINT:
-			(this != nil) or_break
-
-			wind_step(this)
-
+			// BUG: This can be re-entrant wrt. paint!! Faults allocator guard etc. Need to break here.
 			return 0
 		case win.WM_CHAR, win.WM_IME_CHAR:
 			// https://what.thedailywtf.com/topic/27102/how-do-i-allow-input-from-the-windows-10-emoji-panel-in-my-c-application/25.
@@ -222,28 +259,18 @@ wind_init :: proc "contextless" () {
 		hInstance     = wind_state.instance,
 		hIcon         = win.LoadIconA(nil, win.IDI_APPLICATION),
 		hCursor       = win.LoadCursorA(nil, win.IDC_ARROW),
-		hbrBackground = nil, // win.CreateSolidBrush(win.RGB(255, 0, 0)),
+		hbrBackground = wind_state.bg,
 		lpszMenuName  = nil,
 		lpszClassName = win.L(CLASS_NAME),
 		hIconSm       = nil,
 	}
 	class := win.RegisterClassExW(&wc)
 	log.assert(class != 0, "failed to register window class")
-
-	{
-		hr = d2w.D2D1CreateFactory(
-			.MULTI_THREADED,
-			d2w.ID2D1Factory5_UUID,
-			&d2w.D2D1_FACTORY_OPTIONS{ODIN_DEBUG ? .INFORMATION : .NONE},
-			(^rawptr)(&wind_state.factory),
-		)
-		check(hr, "failed to init window")
-	}
 }
 
 @(fini)
 wind_shutdown :: proc "contextless" () {
-	wind_state.factory->Release()
+	win.DeleteObject(cast(win.HGDIOBJ)wind_state.bg)
 }
 
 wind_open :: proc(w: ^Window) -> (ok: bool) {
@@ -254,8 +281,8 @@ wind_open :: proc(w: ^Window) -> (ok: bool) {
 	WIDTH :: 1920
 	HEIGHT :: 1080
 
-	client_area := win.RECT{0, 0, WIDTH, HEIGHT}
-	win.AdjustWindowRect(&client_area, WINDOW_STYLE, win.FALSE)
+	outer_area := win.RECT{0, 0, WIDTH, HEIGHT}
+	win.AdjustWindowRect(&outer_area, WINDOW_STYLE, win.FALSE)
 	w.area = {WIDTH, HEIGHT}
 
 	w.wnd = win.CreateWindowExW(
@@ -265,8 +292,8 @@ wind_open :: proc(w: ^Window) -> (ok: bool) {
 		WINDOW_STYLE,
 		win.CW_USEDEFAULT,
 		win.CW_USEDEFAULT,
-		client_area.right - client_area.left,
-		client_area.bottom - client_area.top,
+		outer_area.right - outer_area.left,
+		outer_area.bottom - outer_area.top,
 		nil,
 		nil,
 		wind_state.instance,
@@ -280,43 +307,45 @@ wind_open :: proc(w: ^Window) -> (ok: bool) {
 	enable_dark := win.TRUE
 	win.DwmSetWindowAttribute(w.wnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &enable_dark, size_of(enable_dark))
 
-	hr: win.HRESULT
+	w.attach = gfx_attach(w.wnd, context.allocator)
+	gfx_swapchain_hydrate(w.attach, w.area, true)
 
-	hr =
-	wind_state.factory->CreateHwndRenderTarget(
-		&d2w.D2D1_RENDER_TARGET_PROPERTIES{pixelFormat = {.UNKNOWN, .PREMULTIPLIED}},
-		&d2w.D2D1_HWND_RENDER_TARGET_PROPERTIES{hwnd = w.wnd, pixelSize = {WIDTH, HEIGHT}},
-		&w.render_target,
-	)
-	check(hr, "failed to create hwnd render target")
-
-	// TODO: Move this.
-	wind_step(w)
+	// TODO: Could defer showing to after first render.
 	win.ShowWindow(w.wnd, win.SW_NORMAL)
 
 	return true
 }
 
 wind_pump :: proc(w: ^Window) -> (keep_alive: bool = true) {
-	for {
-		msg: win.MSG
-		win.PeekMessageW(&msg, nil, 0, 0, win.PM_REMOVE) or_break
+	res := win.MsgWaitForMultipleObjects(1, &w.attach.swapchain_waitable, win.FALSE, win.INFINITE, win.QS_ALLINPUT)
 
-		switch msg.message {
-		case win.WM_QUIT:
-			keep_alive = false
-		case:
-			win.TranslateMessage(&msg)
-			win.DispatchMessageW(&msg)
+	switch res {
+	case win.WAIT_OBJECT_0:
+		wind_step(w)
+	case win.WAIT_OBJECT_0 + 1:
+		for {
+			msg: win.MSG
+			win.PeekMessageW(&msg, nil, 0, 0, win.PM_REMOVE) or_break
+
+			switch msg.message {
+			case win.WM_QUIT:
+				keep_alive = false
+			case:
+				win.TranslateMessage(&msg)
+				win.DispatchMessageW(&msg)
+			}
 		}
+	case:
+		// Unknown error state.
+		log.warnf("unknown MsgWaitForMultipleObjects result %v", res)
+		keep_alive = false
 	}
 
 	return
 }
 
 wind_step :: proc(w: ^Window) -> (updated: bool) {
-	free_all(context.temp_allocator)
-	(w.render_target->CheckWindowState() == .NONE) or_return
+	defer free_all(context.temp_allocator)
 
 	dt: f32
 	now := time.tick_now()
@@ -326,24 +355,32 @@ wind_step :: proc(w: ^Window) -> (updated: bool) {
 	}
 	w.last_paint = now
 
-	w.update_callback(w, w.area, dt)
-	for run := true; run; run = !w.painted_ok {
-		w.render_target->BeginDraw()
-		w.paint_callback(w, !w.painted_ok)
-		hr := w.render_target->EndDraw(nil, nil)
-
-		w.painted_ok = win.SUCCEEDED(hr)
-		D2DERR_RECREATE_TARGET :: transmute(win.HRESULT)u32(0x8899000C)
-		if !win.SUCCEEDED(hr) && hr != D2DERR_RECREATE_TARGET {
-			log.error("failed to end draw")
-		}
+	// Step update.
+	{
+		// Note that we avoid guarding the temporary allocator here.
+		// We may want to reference allocated memory in the paint callback.
+		w.enable_drag = false
+		w.update_callback(w, w.area, dt)
 	}
+	// Step painting.
+	{
+		// There is no subesquent step after this, it's safe to guard the allocator.
+		// Ideal as this callback can re-run per "frame".
+		// BUG: This crashes on alt+enter then alt+tab; is painting->WM_SIZE re-entrant?
+		runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
+		gfx_swapchain_hydrate(w.attach, w.area, false)
+		w.paint_callback(w)
+		gfx_render(w.attach)
+	}
+
+	glyph_end_frame()
 
 	return true
 }
 
 wind_close :: proc(w: ^Window) {
-	w.render_target->Release()
+	gfx_detach(w.attach)
 	win.DestroyWindow(w.wnd)
 	im_state_destroy(&w.im)
 }

@@ -1,0 +1,887 @@
+package main
+
+import "base:runtime"
+import "core:fmt"
+import "core:log"
+import "core:math/linalg"
+import "core:mem"
+import "core:reflect"
+import "core:strings"
+
+import win "core:sys/windows"
+import "vendor:directx/d3d12"
+import "vendor:directx/dxgi"
+
+import "lib:superluminal"
+
+import "build:shaders"
+
+@(export, private, link_name = "NvOptimusEnablement")
+NvOptimusEnablement: u32 = 0x00000001
+@(export, private, link_name = "AmdPowerXpressRequestHighPerformance")
+AmdPowerXpressRequestHighPerformance: i32 = 1
+
+@(export, private, link_name = "D3D12SDKVersion")
+D3D12SDKVersion := 616
+@(export, private, link_name = "D3D12SDKPath")
+D3D12SDKPath := ".\\lib\\microsoft.direct3d.d3d12.1.616.1\\build\\native\\bin\\x64\\"
+
+GFX_COLOR := superluminal.MAKE_COLOR(255, 0, 255)
+
+GFX_DEBUG :: #config(USE_GFX_DEBUG, false)
+
+Gfx_Pass :: enum {
+	Opaque,
+	Opaque_Texture,
+	Expensive,
+	Glass,
+}
+Gfx_Pass_Meta :: struct {
+	vs:            shaders.Rect_Vs_Spec,
+	ps:            shaders.Rect_Ps_Spec,
+	back_to_front: bool,
+}
+@(private, rodata)
+gfx_pass_meta: [Gfx_Pass]Gfx_Pass_Meta = {
+	.Opaque = {vs = {}, ps = {}, back_to_front = false},
+	.Opaque_Texture = {vs = {}, ps = {}, back_to_front = false},
+	.Expensive = {vs = {texture = .Yes, rounded = .Yes}, ps = {texture = .Yes, rounded = .Yes}, back_to_front = true},
+	.Glass = {vs = {rounded = .Yes}, ps = {glass = .Yes, rounded = .Yes}, back_to_front = true},
+}
+
+Gfx_Pass_Offscreen :: enum {
+	Render,
+	Downsample,
+	Working,
+	Output,
+}
+
+Gfx_Bucket :: enum {
+	Back,
+	Fore,
+}
+
+gfx_state: struct {
+	adapter:      ^dxgi.IAdapter,
+	device:       ^d3d12.IDevice4,
+	queue:        ^d3d12.ICommandQueue,
+	dxgi_factory: ^dxgi.IFactory6,
+	root_sig:     ^d3d12.IRootSignature,
+	pipelines:    [Gfx_Pass]^d3d12.IPipelineState,
+	halt_fence:   ^d3d12.IFence,
+	halt_value:   u64,
+}
+
+@(init)
+gfx_init :: proc "contextless" () {
+	context = default_context()
+
+	superluminal.InstrumentationScope("Gfx Init", color = GFX_COLOR)
+
+	hr: win.HRESULT
+
+	dxgi_factory_flags: dxgi.CREATE_FACTORY
+	when GFX_DEBUG {
+		debug: ^d3d12.IDebug1
+		hr = d3d12.GetDebugInterface(d3d12.IDebug1_UUID, cast(^rawptr)&debug)
+		check(hr, "failed to get debug interface")
+		debug->EnableDebugLayer()
+		debug->SetEnableGPUBasedValidation(false) // TODO: Place behind command line args.
+		debug->Release()
+
+		info_queue: ^dxgi.IInfoQueue
+		hr = dxgi.DXGIGetDebugInterface1(0, dxgi.IInfoQueue_UUID, cast(^rawptr)&info_queue)
+		check(hr, "failed to get dxgi debug info queue")
+		info_queue->SetBreakOnSeverity(dxgi.DEBUG_ALL, .ERROR, true)
+		info_queue->SetBreakOnSeverity(dxgi.DEBUG_ALL, .CORRUPTION, true)
+		info_queue->Release()
+
+		dxgi_factory_flags += {.DEBUG}
+	}
+
+	hr = dxgi.CreateDXGIFactory2(dxgi_factory_flags, dxgi.IFactory6_UUID, cast(^rawptr)&gfx_state.dxgi_factory)
+	check(hr, "failed to create dxgi factory")
+
+	find_adapter: {
+		MIN_FEATURELEVEL :: d3d12.FEATURE_LEVEL._12_0
+		// Highest for bindless. Ideally support a fallback!
+		MIN_SHADERMODEL :: d3d12.SHADER_MODEL._6_6
+
+		_adapter: ^dxgi.IAdapter1
+		for idx: u32; gfx_state.dxgi_factory->EnumAdapterByGpuPreference(idx, .HIGH_PERFORMANCE, dxgi.IAdapter1_UUID, (^rawptr)(&_adapter)) == win.S_OK; idx += 1 {
+			desc: dxgi.ADAPTER_DESC1
+			_adapter->GetDesc1(&desc)
+			defer _adapter->Release()
+
+			// TODO: Allow WARP in the worst case.
+			if .SOFTWARE in desc.Flags {continue}
+			if .REMOTE in desc.Flags {continue}
+
+			_device: ^d3d12.IDevice4
+			hr = d3d12.CreateDevice(_adapter, MIN_FEATURELEVEL, d3d12.IDevice4_UUID, (^rawptr)(&_device))
+			win.SUCCEEDED(hr) or_continue
+			defer _device->Release()
+
+			// https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_heap_tier.
+			feat_op: d3d12.FEATURE_DATA_OPTIONS
+			hr = _device->CheckFeatureSupport(.OPTIONS, &feat_op, size_of(feat_op))
+			win.SUCCEEDED(hr) or_continue
+
+			// https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_feature_data_shader_model.
+			feat_sm: d3d12.FEATURE_DATA_SHADER_MODEL = {MIN_SHADERMODEL}
+			hr = _device->CheckFeatureSupport(.SHADER_MODEL, &feat_sm, size_of(feat_sm))
+			(win.SUCCEEDED(hr) && feat_sm.HighestShaderModel >= MIN_SHADERMODEL) or_continue
+
+			feat_op16: d3d12.FEATURE_DATA_OPTIONS16
+			hr = _device->CheckFeatureSupport(.OPTIONS16, &feat_op16, size_of(feat_op16))
+			has_gpu_upload_heap := win.SUCCEEDED(hr) && feat_op16.GPUUploadHeapSupported
+
+			// Add refs to make these temp objects permanent.
+			_device->AddRef()
+			gfx_state.device = _device
+			_adapter->AddRef()
+			gfx_state.adapter = _adapter
+
+			log.debugf(
+				"using %s: %M mem, sm: %v, heap: %v, gpuheap: %v",
+				desc.Description,
+				desc.DedicatedVideoMemory,
+				feat_sm.HighestShaderModel,
+				feat_op.ResourceHeapTier,
+				has_gpu_upload_heap,
+			)
+
+			break find_adapter
+		}
+
+		log.panic("failed to create capable device")
+	}
+
+	hr = gfx_state.device->CreateFence(gfx_state.halt_value, nil, d3d12.IFence_UUID, (^rawptr)(&gfx_state.halt_fence))
+	check(hr, "failed to create halt fence")
+
+	// TODO: Only a graphics command queue for now (no copy!).
+	hr = gfx_state.device->CreateCommandQueue(&{Type = .DIRECT}, d3d12.ICommandQueue_UUID, (^rawptr)(&gfx_state.queue))
+	check(hr, "failed to create command queue")
+
+	// TODO: Check LSP correctly handles "expand_values" in method arguments.
+	sig_bin := shaders.root_signature({})
+	hr = gfx_state.device->CreateRootSignature(0, expand_values(sig_bin), d3d12.IRootSignature_UUID, (^rawptr)(&gfx_state.root_sig))
+	check(hr, "failed to create root signature")
+
+	for &pipeline, type in gfx_state.pipelines {
+		meta := gfx_pass_meta[type]
+
+		is_opaque := !meta.back_to_front
+
+		target_blend_state: d3d12.RENDER_TARGET_BLEND_DESC = {
+			BlendEnable           = !is_opaque,
+			LogicOpEnable         = false,
+			SrcBlend              = .ONE,
+			DestBlend             = .INV_SRC_ALPHA,
+			BlendOp               = .ADD,
+			SrcBlendAlpha         = .ONE,
+			DestBlendAlpha        = .ZERO, // .INV_SRC_ALPHA,
+			BlendOpAlpha          = .ADD,
+			LogicOp               = .NOOP,
+			RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE_ALL),
+		}
+		blend_state: d3d12.BLEND_DESC = {
+			AlphaToCoverageEnable = false,
+			IndependentBlendEnable = false,
+			RenderTarget = {0 = target_blend_state},
+		}
+		desc: d3d12.GRAPHICS_PIPELINE_STATE_DESC = {
+			pRootSignature = gfx_state.root_sig,
+			VS = shaders.rect_vs(meta.vs),
+			PS = shaders.rect_ps(meta.ps),
+			BlendState = blend_state,
+			SampleMask = 0xFFFFFFFF,
+			RasterizerState = {
+				FillMode = .SOLID,
+				CullMode = .BACK,
+				FrontCounterClockwise = false,
+				DepthBias = 0,
+				DepthBiasClamp = 0,
+				SlopeScaledDepthBias = 0,
+				DepthClipEnable = false,
+				MultisampleEnable = false,
+				AntialiasedLineEnable = false,
+				ForcedSampleCount = 0,
+				ConservativeRaster = .OFF,
+			},
+			DepthStencilState = {
+				DepthEnable = true,
+				DepthWriteMask = is_opaque ? .ALL : .ZERO,
+				DepthFunc = .GREATER_EQUAL,
+				StencilEnable = false,
+				StencilReadMask = d3d12.DEFAULT_STENCIL_READ_MASK,
+				StencilWriteMask = d3d12.DEFAULT_STENCIL_WRITE_MASK,
+				FrontFace = {.KEEP, .KEEP, .KEEP, .ALWAYS},
+				BackFace = {.KEEP, .KEEP, .KEEP, .ALWAYS},
+			},
+			InputLayout = {pInputElementDescs = raw_data(shader_common_input), NumElements = u32(len(shader_common_input))},
+			PrimitiveTopologyType = .TRIANGLE,
+			NumRenderTargets = 1,
+			RTVFormats = {0 = SWAPCHAIN_FORMAT},
+			DSVFormat = DEPTH_STENCIL_FORMAT,
+			SampleDesc = {1, 0},
+		}
+
+		hr = gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pipeline))
+		check(hr, "failed to create graphics pipeline")
+	}
+
+	gfx_descriptor_init()
+
+	gfx_ffx_init()
+}
+
+@(fini)
+gfx_fini :: proc "contextless" () {
+	superluminal.InstrumentationScope("Gfx Fini", color = GFX_COLOR)
+
+	gfx_descriptor_fini()
+
+	for pipeline in gfx_state.pipelines {
+		pipeline->Release()
+	}
+
+	gfx_state.adapter->Release()
+	gfx_state.device->Release()
+	gfx_state.queue->Release()
+	gfx_state.dxgi_factory->Release()
+	gfx_state.root_sig->Release()
+	gfx_state.halt_fence->Release()
+	// gfx_state.heap->Release()
+
+	gfx_ffx_fini()
+}
+
+// This isn't thread safe.
+gfx_wait_on_gpu :: proc() {
+	hr: win.HRESULT
+
+	for queue in ([?]^d3d12.ICommandQueue{gfx_state.queue}) {
+		if queue == nil {continue}
+
+		gfx_state.halt_value += 1
+
+		hr = queue->Signal(gfx_state.halt_fence, gfx_state.halt_value)
+		check(hr, "failed to signal halt fence")
+
+		hr = gfx_state.halt_fence->SetEventOnCompletion(gfx_state.halt_value, nil)
+		check(hr, "failed to wait on halt fence")
+	}
+}
+
+// odinfmt: disable
+@(private, rodata)
+shader_common_input: []d3d12.INPUT_ELEMENT_DESC = {
+	{"RECT",  0, .R32G32B32A32_FLOAT, 0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 0, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 1, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 2, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 3, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"TEXC",  0, .R32G32B32A32_FLOAT, 2, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"PACK",  0, .R32G32B32A32_UINT,  3, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+}
+// odinfmt: enable
+
+BUFFER_COUNT :: 2
+SWAPCHAIN_FLAGS :: dxgi.SWAP_CHAIN{.FRAME_LATENCY_WAITABLE_OBJECT}
+SWAPCHAIN_FORMAT :: dxgi.FORMAT.R8G8B8A8_UNORM
+DEPTH_STENCIL_FORMAT :: dxgi.FORMAT.D32_FLOAT_S8X24_UINT
+DEPTH_STENCIL_CLEAR :: d3d12.DEPTH_STENCIL_VALUE{0, 1}
+COLOR_CLEAR :: [4]f32{100.0 / 255, 118.0 / 255, 140.0 / 255, 1.0}
+MAX_DRAW_CMDS :: 2048
+
+// Inputs per instance, assuming N verts each.
+VERTS_PER_INSTANCE :: 4
+Shader_Input_Layout :: #soa[MAX_DRAW_CMDS]struct {
+	rect:       [4]f32,
+	color:      [VERTS_PER_INSTANCE][4]u8,
+	texc:       [4]f32,
+	using pack: struct {
+		texi:     u32,
+		// TODO: No "using" to avoid compiler bug:
+		// 	"llvm_backend_utility.cpp(1133): Assertion Failure: `is_type_pointer(s.type)`".
+		// 	393e00bec3e855475659de0c6c38d3898a36cb36.
+		inner:    bit_field u32 {
+			depth:    u32  | 28,
+			round_tl: bool | 1,
+			round_tr: bool | 1,
+			round_bl: bool | 1,
+			round_br: bool | 1,
+		},
+		corner:   f32,
+		softness: f32,
+	},
+}
+
+Gfx_Pass_Cmd :: struct {
+	buf:        ^d3d12.IResource,
+	buf_mapped: ^[BUFFER_COUNT]Shader_Input_Layout,
+	count:      int,
+}
+
+Gfx_Bucket_Cmd :: struct {
+	total:  int,
+	passes: [Gfx_Pass]Gfx_Pass_Cmd,
+}
+
+Gfx_Attach :: struct {
+	wnd:                win.HWND,
+	// Swapchain.
+	swapchain:          ^dxgi.ISwapChain3,
+	swapchain_rts:      [BUFFER_COUNT]^d3d12.IResource,
+	swapchain_waitable: win.HANDLE,
+	swapchain_res:      [2]u32,
+	// Depth.
+	depth_stencil:      ^d3d12.IResource,
+	depth_stencil_view: Gfx_Descriptor_Handle,
+	// Cmds.
+	cmd_list:           ^d3d12.IGraphicsCommandList,
+	cmd_allocators:     [BUFFER_COUNT]^d3d12.ICommandAllocator,
+	// Cmds pt2.
+	count_started:      u64, // How many frames have we started rendering?
+	count_done:         ^d3d12.IFence, // How many frames have we finished rendering?
+	// Cmds pt3.
+	buckets:            [Gfx_Bucket]Gfx_Bucket_Cmd,
+	// TODO: Simplify this.
+	offscreen:          [Gfx_Pass_Offscreen]struct {
+		texture:  ^d3d12.IResource,
+		rtv, srv: Gfx_Descriptor_Handle,
+	},
+	// Ffx.
+	ffx_blur:           Gfx_Ffx_Blur_Context,
+	ffx_blur_cmd:       Gfx_Ffx_Blur_Cmd,
+}
+
+// TODO: We need to rethink this whole concept. Pathalogical case where size is {0,0} -> no init -> crash..!
+gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (updated: bool) {
+	res := linalg.array_cast(res, u32)
+	(initial || a.swapchain_res != res) or_return
+	a.swapchain_res = res
+	(initial || res.x > 0 && res.y > 0) or_return
+
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+	superluminal.InstrumentationScope("Gfx Swapchain Hydrate", color = GFX_COLOR)
+
+	log.debug("resizing swapchain to:", res)
+
+	// These resources are probably already in use.
+	when !initial {
+		gfx_wait_on_gpu()
+	}
+
+	hr: win.HRESULT
+
+	// Swapchain color.
+	if initial {
+		desc: dxgi.SWAP_CHAIN_DESC1 = {
+			Width       = res.x,
+			Height      = res.y,
+			Format      = SWAPCHAIN_FORMAT,
+			SampleDesc  = {1, 0},
+			BufferUsage = {},
+			BufferCount = BUFFER_COUNT,
+			SwapEffect  = .FLIP_DISCARD,
+			AlphaMode   = .IGNORE,
+			Flags       = SWAPCHAIN_FLAGS,
+			Scaling     = .NONE,
+		}
+
+		_swapchain: ^dxgi.ISwapChain1
+		hr = gfx_state.dxgi_factory->CreateSwapChainForHwnd(gfx_state.queue, a.wnd, &desc, nil, nil, &_swapchain)
+		check(hr, "failed to create swapchain")
+		defer _swapchain->Release()
+
+		hr = _swapchain->QueryInterface(dxgi.ISwapChain3_UUID, cast(^rawptr)&a.swapchain)
+		check(hr, "failed to upgrade swapchain")
+
+		hr = a.swapchain->SetMaximumFrameLatency(BUFFER_COUNT)
+		check(hr, "failed to set swapchain maximum frame latency")
+
+		// TODO: Better support; should use NO_TEARING to get variable refresh when fullscreen.
+		hr = gfx_state.dxgi_factory->MakeWindowAssociation(a.wnd, {.NO_ALT_ENTER})
+		check(hr, "failed to make window association")
+
+		a.swapchain_waitable = a.swapchain->GetFrameLatencyWaitableObject()
+		log.assert(a.swapchain_waitable != win.INVALID_HANDLE, "failed to get swapchian latency waitable object")
+	} else {
+		for &surface in a.swapchain_rts {
+			surface->Release()
+		}
+		hr = a.swapchain->ResizeBuffers(BUFFER_COUNT, res.x, res.y, SWAPCHAIN_FORMAT, SWAPCHAIN_FLAGS)
+		check(hr, "failed to resize swapchain")
+	}
+	for i in 0 ..< BUFFER_COUNT {
+		hr = a.swapchain->GetBuffer(u32(i), d3d12.IResource_UUID, cast(^rawptr)&a.swapchain_rts[i])
+		check(hr, "failed to query swapchain surface")
+
+		a.swapchain_rts[i]->SetName(win.utf8_to_wstring(fmt.tprintf("Swapchain Buffer %i", i)))
+	}
+
+	// Depth.
+	when initial {
+		a.depth_stencil_view = gfx_descriptor_alloc(.DSV)
+	} else {
+		a.depth_stencil->Release()
+	}
+	{
+		tex_desc := d3d12.RESOURCE_DESC {
+			Dimension        = .TEXTURE2D,
+			Width            = u64(res.x),
+			Height           = res.y,
+			DepthOrArraySize = 1,
+			MipLevels        = 1,
+			Format           = DEPTH_STENCIL_FORMAT,
+			SampleDesc       = {1, 0},
+			Layout           = .UNKNOWN,
+			Flags            = {.ALLOW_DEPTH_STENCIL, .DENY_SHADER_RESOURCE},
+		}
+
+		hr =
+		gfx_state.device->CreateCommittedResource(
+			&{Type = .DEFAULT},
+			{.CREATE_NOT_ZEROED},
+			&tex_desc,
+			{.DEPTH_WRITE},
+			&d3d12.CLEAR_VALUE{Format = tex_desc.Format, DepthStencil = DEPTH_STENCIL_CLEAR},
+			d3d12.IResource_UUID,
+			(^rawptr)(&a.depth_stencil),
+		)
+		check(hr, "failed to create depthstencil texture")
+
+		gfx_state.device->CreateDepthStencilView(
+			a.depth_stencil,
+			&d3d12.DEPTH_STENCIL_VIEW_DESC{Format = tex_desc.Format, ViewDimension = .TEXTURE2D},
+			gfx_descriptor_cpu(a.depth_stencil_view),
+		)
+	}
+
+	// Offscreen temp buffer.
+	for &pack, type in a.offscreen {
+		when initial {
+			pack.rtv = gfx_descriptor_alloc(.RTV)
+			pack.srv = gfx_descriptor_alloc(.CBV_SRV_UAV)
+		} else {
+			pack.texture->Release()
+		}
+
+		switch type {
+		case .Render:
+			hr =
+			gfx_state.device->CreateCommittedResource(
+				&{Type = .DEFAULT},
+				{},
+				&{
+					Dimension = .TEXTURE2D,
+					Width = u64(res.x),
+					Height = res.y,
+					DepthOrArraySize = 1,
+					MipLevels = 11,
+					Format = SWAPCHAIN_FORMAT,
+					SampleDesc = {1, 0},
+					Layout = .UNKNOWN,
+					Flags = {.ALLOW_RENDER_TARGET, .ALLOW_UNORDERED_ACCESS},
+				},
+				{.RENDER_TARGET},
+				&{Format = SWAPCHAIN_FORMAT, Color = COLOR_CLEAR},
+				d3d12.IResource_UUID,
+				(^rawptr)(&pack.texture),
+			)
+		case .Downsample:
+			hr =
+			gfx_state.device->CreateCommittedResource(
+				&{Type = .DEFAULT},
+				{},
+				&{
+					Dimension = .TEXTURE2D,
+					Width = u64(res.x),
+					Height = res.y,
+					DepthOrArraySize = 1,
+					MipLevels = 11,
+					Format = SWAPCHAIN_FORMAT,
+					SampleDesc = {1, 0},
+					Layout = .UNKNOWN,
+					Flags = {.ALLOW_UNORDERED_ACCESS},
+				},
+				{.PIXEL_SHADER_RESOURCE},
+				nil,
+				d3d12.IResource_UUID,
+				(^rawptr)(&pack.texture),
+			)
+		case .Working, .Output:
+			hr =
+			gfx_state.device->CreateCommittedResource(
+				&{Type = .DEFAULT},
+				{},
+				&{
+					Dimension = .TEXTURE2D,
+					Width = u64(res.x),
+					Height = res.y,
+					DepthOrArraySize = 1,
+					MipLevels = 1,
+					Format = SWAPCHAIN_FORMAT,
+					SampleDesc = {1, 0},
+					Layout = .UNKNOWN,
+					Flags = {.ALLOW_UNORDERED_ACCESS},
+				},
+				{.NON_PIXEL_SHADER_RESOURCE},
+				nil,
+				d3d12.IResource_UUID,
+				(^rawptr)(&pack.texture),
+			)
+		}
+		check(hr, "failed to create temp texture")
+
+		name := fmt.tprintf("Offscreen render buffer %s", type)
+		name_l := win.utf8_to_wstring(name, context.temp_allocator)
+		pack.texture->SetName(name_l)
+
+		if type == .Render {
+			handle := gfx_descriptor_cpu(pack.rtv)
+			gfx_state.device->CreateRenderTargetView(pack.texture, nil, handle)
+		}
+		if type == .Downsample {
+			handle := gfx_descriptor_cpu(pack.srv)
+			gfx_state.device->CreateShaderResourceView(pack.texture, nil, handle)
+		}
+	}
+
+	return true
+}
+
+gfx_attach :: proc(wnd: win.HWND, allocator := context.allocator) -> ^Gfx_Attach {
+	superluminal.InstrumentationScope("Gfx Attach", color = GFX_COLOR)
+
+	attach := new(Gfx_Attach, allocator)
+	attach.wnd = wnd
+
+	hr: win.HRESULT
+	{
+		hr = gfx_state.device->CreateFence(0, nil, d3d12.IFence_UUID, (^rawptr)(&attach.count_done))
+		check(hr, "failed to create cmd array fence")
+	}
+	{
+		type := d3d12.COMMAND_LIST_TYPE.DIRECT
+
+		hr = gfx_state.device->CreateCommandList1(0, type, nil, d3d12.ICommandList_UUID, (^rawptr)(&attach.cmd_list))
+		check(hr, "failed to create command list")
+		for &allocator in attach.cmd_allocators {
+			hr = gfx_state.device->CreateCommandAllocator(type, d3d12.ICommandAllocator_UUID, (^rawptr)(&allocator))
+			check(hr, "failed to create command allocator")
+		}
+	}
+	for &bucket in attach.buckets {
+		for &pass in bucket.passes {
+			hr =
+			gfx_state.device->CreateCommittedResource(
+				&{Type = .UPLOAD},
+				{.CREATE_NOT_ZEROED},
+				&{
+					Dimension = .BUFFER,
+					Width = BUFFER_COUNT * size_of(Shader_Input_Layout),
+					Height = 1,
+					DepthOrArraySize = 1,
+					MipLevels = 1,
+					SampleDesc = {1, 0},
+					Layout = .ROW_MAJOR,
+				},
+				d3d12.RESOURCE_STATE_COMMON,
+				nil,
+				d3d12.IResource_UUID,
+				(^rawptr)(&pass.buf),
+			)
+			check(hr, "failed to create input buffer")
+
+			hr = pass.buf->Map(0, &d3d12.RANGE{0, 0}, (^rawptr)(&pass.buf_mapped))
+			check(hr, "failed to map input buffer")
+		}
+	}
+
+	return attach
+}
+
+gfx_detach :: proc(a: ^Gfx_Attach, allocator := context.allocator) {
+	gfx_wait_on_gpu()
+
+	for pack in a.offscreen {
+		pack.texture->Release()
+		gfx_descriptor_free(pack.rtv)
+		gfx_descriptor_free(pack.srv)
+	}
+
+	for bucket in a.buckets {
+		for pass in bucket.passes {
+			pass.buf->Release()
+		}
+	}
+
+	gfx_ffx_blur_destroy(&a.ffx_blur)
+
+	for v in a.swapchain_rts {v->Release()}
+	a.swapchain->Release()
+
+	a.depth_stencil->Release()
+	a.cmd_list->Release()
+	for v in a.cmd_allocators {v->Release()}
+	a.count_done->Release()
+
+	win.CloseHandle(a.swapchain_waitable)
+	free(a, allocator)
+}
+
+gfx_render :: proc(a: ^Gfx_Attach) {
+	@(static) first := true
+	if first {
+		defer first = false
+		gfx_ffx_blur_make(&a.ffx_blur)
+		a.ffx_blur_cmd = gfx_ffx_blur_cmd(&a.ffx_blur, a.offscreen[.Render].texture, a.offscreen[.Downsample].texture, 0, 0)
+	}
+
+	// TODO: We can skip rendering when our framebuffer is zero-sized, but we MUST always present.
+	hr: win.HRESULT
+
+	bb_idx := a.swapchain->GetCurrentBackBufferIndex()
+	bb_rt := a.swapchain_rts[bb_idx]
+
+	// Wait for rendering commands concerning this backbuffer to complete.
+	a.count_started += 1
+	if sync := max(BUFFER_COUNT, a.count_started) - BUFFER_COUNT; a.count_done->GetCompletedValue() < sync {
+		hr = a.count_done->SetEventOnCompletion(sync, nil)
+		check(hr, "failed to wait on n-buffering fence")
+	}
+
+	// "Cannot reset a command allocator while the GPU may be executing a command list stored in the memory associated with the command allocator".
+	// "Command lists can be reset immediately after calling ExecuteCommandLists"
+	// https://stackoverflow.com/questions/34991725/does-it-make-sense-to-create-an-allocator-per-rendertarget-in-the-swapchain.
+	hr = a.cmd_allocators[bb_idx]->Reset()
+	check(hr, "failed to reset command allocator")
+	hr = a.cmd_list->Reset(a.cmd_allocators[bb_idx], nil)
+	check(hr, "failed to reset command list")
+
+	// TODO: Where do we want to put this?
+	glyph_pass_cook(a.cmd_list, bb_idx)
+	glyph_draw()
+
+	res := a.swapchain_res
+	viewport := d3d12.VIEWPORT{0, 0, f32(res.x), f32(res.y), 0, 1}
+	scissor_rect := d3d12.RECT{0, 0, i32(res.x), i32(res.y)}
+	a.cmd_list->RSSetViewports(1, &viewport)
+	a.cmd_list->RSSetScissorRects(1, &scissor_rect)
+
+	color_view := gfx_descriptor_cpu(a.offscreen[.Render].rtv)
+	depth_stencil_view := gfx_descriptor_cpu(a.depth_stencil_view)
+
+	a.cmd_list->OMSetRenderTargets(1, &color_view, win.TRUE, &depth_stencil_view)
+	a.cmd_list->ClearRenderTargetView(color_view, &[?]f32{100.0 / 255, 118.0 / 255, 140.0 / 255, 1.0}, 0, nil)
+
+	for &bucket, i in a.buckets {
+		a.cmd_list->ClearDepthStencilView(depth_stencil_view, {.DEPTH}, DEPTH_STENCIL_CLEAR.Depth, DEPTH_STENCIL_CLEAR.Stencil, 0, nil)
+
+		// "SetDescriptorHeaps must be called first.."
+		// https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_DynamicResources.html#setdescriptorheaps-and-setrootsignature.
+		a.cmd_list->SetDescriptorHeaps(1, &gfx_descriptor.heaps[.CBV_SRV_UAV].resource)
+		a.cmd_list->SetGraphicsRootSignature(gfx_state.root_sig)
+		{
+			Scene_Constants :: struct {
+				viewport:     [2]f32,
+				viewport_inv: [2]f32,
+				accum_idx:    u32,
+			}
+			viewport := [2]f32{f32(a.swapchain_res.x), f32(a.swapchain_res.y)}
+			a.cmd_list->SetGraphicsRoot32BitConstants(
+				0,
+				size_of(Scene_Constants) / size_of(u32),
+				&Scene_Constants{viewport, 1 / viewport, a.offscreen[.Downsample].srv.idx},
+				0,
+			)
+		}
+
+		defer bucket.total = 0
+		for &pass, pass_type in bucket.passes {
+			defer pass.count = 0
+			count := u32(pass.count)
+			(count > 0) or_continue
+
+			index := gfx_pass_meta[pass_type].back_to_front ? 0 : MAX_DRAW_CMDS - pass.count
+
+			vertex_fields := reflect.struct_fields_zipped(Shader_Input_Layout)
+			vertex_root := pass.buf->GetGPUVirtualAddress() + u64(bb_idx) * size_of(Shader_Input_Layout)
+			views := make([]d3d12.VERTEX_BUFFER_VIEW, len(vertex_fields), context.temp_allocator)
+			for f, i in vertex_fields {
+				inner := f.type.variant.(runtime.Type_Info_Array) or_else log.panicf("invalid shader field %#v", f)
+				views[i] = {vertex_root + u64(f.offset), u32(inner.elem_size * inner.count), u32(inner.elem.size)}
+			}
+
+			a.cmd_list->IASetPrimitiveTopology(.TRIANGLESTRIP)
+			a.cmd_list->IASetVertexBuffers(0, cast(u32)len(views), raw_data(views))
+
+			a.cmd_list->SetPipelineState(gfx_state.pipelines[pass_type])
+			a.cmd_list->DrawInstanced(4, count, 0, u32(index))
+		}
+		{
+			barriers := [?]d3d12.RESOURCE_BARRIER {
+				{
+					Type = .TRANSITION,
+					Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.RENDER_TARGET}, {.NON_PIXEL_SHADER_RESOURCE}},
+				},
+				{
+					Type = .TRANSITION,
+					Transition = {
+						a.offscreen[.Downsample].texture,
+						d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+						{.PIXEL_SHADER_RESOURCE},
+						{.NON_PIXEL_SHADER_RESOURCE},
+					},
+				},
+			}
+			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
+		}
+
+		{
+			gfx_ffx_blur_mount(&a.ffx_blur_cmd, a.cmd_list)
+		}
+
+		{
+			barriers := [?]d3d12.RESOURCE_BARRIER {
+				{
+					Type = .TRANSITION,
+					Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.NON_PIXEL_SHADER_RESOURCE}, {.RENDER_TARGET}},
+				},
+				{
+					Type = .TRANSITION,
+					Transition = {
+						a.offscreen[.Downsample].texture,
+						d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+						{.NON_PIXEL_SHADER_RESOURCE},
+						{.PIXEL_SHADER_RESOURCE},
+					},
+				},
+			}
+			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
+		}
+	}
+
+	if true {
+		{
+			barriers := [?]d3d12.RESOURCE_BARRIER {
+				{Type = .TRANSITION, Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.RENDER_TARGET}, {.COPY_SOURCE}}},
+				{Type = .TRANSITION, Transition = {bb_rt, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, d3d12.RESOURCE_STATE_PRESENT, {.COPY_DEST}}},
+			}
+			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
+		}
+		{
+			copy_src: d3d12.TEXTURE_COPY_LOCATION
+			copy_src.pResource = a.offscreen[.Render].texture
+			copy_src.Type = .SUBRESOURCE_INDEX
+			copy_src.SubresourceIndex = 0
+
+			copy_dst: d3d12.TEXTURE_COPY_LOCATION
+			copy_dst.pResource = bb_rt
+			copy_dst.Type = .SUBRESOURCE_INDEX
+			copy_dst.SubresourceIndex = 0
+
+			a.cmd_list->CopyTextureRegion(&copy_dst, 0, 0, 0, &copy_src, nil)
+		}
+		{
+			barriers := [?]d3d12.RESOURCE_BARRIER {
+				{Type = .TRANSITION, Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.COPY_SOURCE}, {.RENDER_TARGET}}},
+				{Type = .TRANSITION, Transition = {bb_rt, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.COPY_DEST}, d3d12.RESOURCE_STATE_PRESENT}},
+			}
+			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
+		}
+	}
+
+	hr = a.cmd_list->Close()
+	check(hr, "failed to close command list")
+
+	cmd_lists := [?]^d3d12.IGraphicsCommandList{a.cmd_list}
+	gfx_state.queue->ExecuteCommandLists(len(cmd_lists), (^^d3d12.ICommandList)(&cmd_lists[0]))
+
+	// TODO: Recreate renderer if hr is "DXGI_ERROR_DEVICE_REMOVED" or DXGI_ERROR_DEVICE_RESET; IDevice->GetDeviceRemovedReason().
+	{
+		params: dxgi.PRESENT_PARAMETERS
+		hr = a.swapchain->Present1(1, {.RESTART}, &params)
+		check(hr, "present failed")
+	}
+
+	hr = gfx_state.queue->Signal(a.count_done, a.count_started)
+	check(hr, "failed to instruct frame fence signal")
+}
+
+// Get the index of the CPU-facing staging buffer to write into.
+// TODO: This impl is slow for no good reason.
+gfx_buffer_idx :: proc(attach: ^Gfx_Attach) -> int {
+	if attach.swapchain != nil {
+		return cast(int)attach.swapchain->GetCurrentBackBufferIndex()
+	} else {
+		return 0
+	}
+}
+
+gfx_attach_draw :: proc(
+	attach: ^Gfx_Attach,
+	off: [2]f32,
+	dim: [2]f32,
+	color: [4]f32,
+	texc := [4]f32{},
+	texi := max(u32),
+	rounding: f32 = 0,
+	rounding_corners: [4]bool = {},
+	depth: Maybe(u32) = nil,
+	test: bool = false,
+) {
+	bucket_type: Gfx_Bucket
+	pass_type: Gfx_Pass
+	switch true {
+	case color.a < 1:
+		pass_type = .Expensive
+	case texi != max(u32):
+		pass_type = .Expensive
+	case texi != max(u32):
+		pass_type = .Opaque_Texture
+	case:
+		pass_type = .Opaque
+	}
+
+	if test {
+		bucket_type = .Fore
+		pass_type = .Glass
+	}
+
+	bucket := &attach.buckets[bucket_type]
+	pass := &bucket.passes[pass_type]
+	pass_meta := gfx_pass_meta[pass_type]
+
+	index: int
+	{
+		defer pass.count += 1
+		index = pass_meta.back_to_front ? pass.count : (MAX_DRAW_CMDS - 1 - pass.count)
+	}
+
+	depth := depth.? or_else u32(bucket.total)
+	defer bucket.total += 1
+
+	color := linalg.array_cast(color * 255, u8)
+
+	buf := gfx_buffer_idx(attach)
+	pass.buf_mapped[buf][index].rect = {off.x, dim.x, off.y, dim.y}
+	pass.buf_mapped[buf][index].color[0] = color
+	pass.buf_mapped[buf][index].color[1] = color
+	pass.buf_mapped[buf][index].color[2] = color
+	pass.buf_mapped[buf][index].color[3] = color
+	pass.buf_mapped[buf][index].texc = texc
+	pass.buf_mapped[buf][index].texi = texi
+	pass.buf_mapped[buf][index].corner = 32
+	pass.buf_mapped[buf][index].softness = 0.1
+	pass.buf_mapped[buf][index].softness = 1
+	pass.buf_mapped[buf][index].inner.round_tl = rounding_corners[0]
+	pass.buf_mapped[buf][index].inner.round_tr = rounding_corners[1]
+	pass.buf_mapped[buf][index].inner.round_bl = rounding_corners[2]
+	pass.buf_mapped[buf][index].inner.round_br = rounding_corners[3]
+	pass.buf_mapped[buf][index].inner.depth = depth
+}
