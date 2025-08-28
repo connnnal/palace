@@ -31,8 +31,15 @@ shaders = [
 			{
 				name = "ROUNDED"
 				tweaks = [
-					{ name = "YES", defines = ["SPEC_ROUNDED"] }
 					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_ROUNDED"] }
+				]
+			}
+			{
+				name = "BORDER"
+				tweaks = [
+					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_BORDER"] }
 				]
 			}
 		]
@@ -57,8 +64,8 @@ shaders = [
 			{
 				name = "ROUNDED"
 				tweaks = [
-					{ name = "YES", defines = ["SPEC_ROUNDED"] }
 					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_ROUNDED"] }
 				]
 			}
 			{
@@ -66,6 +73,13 @@ shaders = [
 				tweaks = [
 					{ name = "NO" }
 					{ name = "YES", defines = ["SPEC_GLASS"] }
+				]
+			}
+			{
+				name = "BORDER"
+				tweaks = [
+					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_BORDER"] }
 				]
 			}
 		]

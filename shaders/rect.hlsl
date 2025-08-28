@@ -13,12 +13,34 @@ struct InputPs {
 #ifdef SPEC_TEXTURE
                     float2 tex        : TEXCOORD0;
 #endif
-#ifdef SPEC_ROUNDED
+#if defined(SPEC_ROUNDED) || defined(SPEC_BORDER)
     nointerpolation float2 shape_size : CSIZE;
 	                float2 shape_uv   : UVSHAPE;
 #endif
 					uint4  pack       : PACK;
 };
+
+uint pack_texi(uint4 pack) {
+	return pack.x;
+}
+float pack_depth(uint4 pack) {
+	return asfloat(0x800000 + (pack.y & 0xFFFF));
+}
+uint pack_border(uint4 pack) {
+	return (pack.y >> 16) & 0xFF;
+}
+float4 pack_rounding(uint4 pack) {
+	float radius = asfloat(pack.z);
+	return float4(
+		( pack.y & (0x1 << 24) ) ? radius : 0.f,
+		( pack.y & (0x2 << 24) ) ? radius : 0.f,
+		( pack.y & (0x4 << 24) ) ? radius : 0.f,
+		( pack.y & (0x8 << 24) ) ? radius : 0.f
+	);
+}
+float pack_softness(uint4 pack) {
+	return asfloat(pack.w);
+}
 
 InputPs vs_main(InputVs input)
 {
@@ -42,7 +64,7 @@ InputPs vs_main(InputVs input)
 	pos.y = 1 - pos.y;
 	pos.x = (pos.x - 0.5f) * 2.0f;
 	pos.y = (pos.y - 0.5f) * 2.0f;
-	pos.z = asfloat((input.pack.y & 0x0FFFFFFF) + 0x800000);
+	pos.z = pack_depth(input.pack);
 	output.pos = pos;
 	
 	// TODO: Faster than dynamic indexing?
@@ -55,17 +77,15 @@ InputPs vs_main(InputVs input)
 	output.color = float4(color.xyz * color.a, color.a);
 
 #ifdef SPEC_TEXTURE
-	float4 tex = float4(
+	output.tex = float2(
 		input.texc.x + input.texc.y * uv.x,
-		input.texc.z + input.texc.w * uv.y,
-		0,
-		1
+		input.texc.z + input.texc.w * uv.y
 	);
-	output.tex = tex.xy;
 #endif
 
 #if defined(SPEC_ROUNDED)
-	float softness = (1/asfloat(input.pack.w))-1;
+	// TODO: What do we do this weird math for?
+	float softness = (1/pack_softness(input.pack))-1;
 	float inset = -softness;
 	float2 fac = (inset / 2) / shape_size;
 
@@ -181,7 +201,7 @@ half FilterSdfTextureExact(half sdf, float2 uvCoordinate, half2 textureSize) {
     float pixelFootprintDiameter = sqrt(pixelFootprintDiameterSqr);
     // clamp the filter width to [0, 1] so we won't overfilter, which fades the texture into grey
     pixelFootprintDiameter = saturate(pixelFootprintDiameter) ; 
-    return saturate(inverseLerp(-pixelFootprintDiameter, pixelFootprintDiameter, sdf));
+    return (inverseLerp(-pixelFootprintDiameter, pixelFootprintDiameter, sdf));
 }
 
 //
@@ -201,15 +221,10 @@ float4 ps_main(InputPs input) : SV_Target
 {
 	float4 color = input.color;
 
-	uint4 pack = input.pack;
-	uint texi = pack.x;
-	uint4 corner = float4(
-		((pack.y >> 28) & 1) ? asfloat(pack.z) : 0.0f,
-		((pack.y >> 29) & 1) ? asfloat(pack.z) : 0.0f,
-		((pack.y >> 30) & 1) ? asfloat(pack.z) : 0.0f,
-		((pack.y >> 31) & 1) ? asfloat(pack.z) : 0.0f
-	);
-	float softness = asfloat(pack.w);
+	uint texi = pack_texi(input.pack);
+	float4 corner = pack_rounding(input.pack);
+	float softness = pack_softness(input.pack);
+	float border = pack_border(input.pack);
 
 #ifdef SPEC_TEXTURE
 	if (texi != 0xFFFFFFFF) {
@@ -219,12 +234,33 @@ float4 ps_main(InputPs input) : SV_Target
 #endif
 
 #ifdef SPEC_ROUNDED
-	float dist = sdRoundBox((input.shape_uv*2-1)*input.shape_size, input.shape_size, corner, 1);
+	float dist = sdRoundBox((input.shape_uv*2-1)*input.shape_size, input.shape_size, corner, 2);
+
+	#ifdef SPEC_BORDER
+		if (border > 0) {
+			// TODO: This math for nesting corner radii feels optically incorrect.
+			float dist_inner = sdRoundBox((input.shape_uv * 2 - 1) * input.shape_size, input.shape_size - 2 * border, max(0, corner - border * 2), 1);
+			dist = max(dist, -dist_inner);
+		}
+	#endif
+
 	float alpha = FilterSdfTextureApproximative(-dist * softness, input.shape_uv, input.shape_size);
 	if (softness < 0.5) {
 		alpha = smoothstep(0,1,alpha);
 	}
 	color *= alpha;
+#else
+	#ifdef SPEC_BORDER
+		// TODO: Faster to use discard here?
+		float2 shape_px = input.shape_uv * input.shape_size;
+		float alpha = (
+			( shape_px.x > border )
+			&& ( shape_px.x - input.shape_size.x < -border )
+			&& ( shape_px.y > border )
+			&& ( shape_px.y - input.shape_size.y < -border )
+		) ? 0.f : 1.f;
+		color *= alpha;
+	#endif
 #endif
 
 #ifdef SPEC_GLASS
@@ -239,10 +275,6 @@ float4 ps_main(InputPs input) : SV_Target
 	}
 	color.xyz *= accum / float(mip_end - mip_start);
 	color.xyz *= lerp( .95f, 1.f, noise1(input_pos_frac.x, input_pos_frac.y) );
-#endif
-
-#ifdef SPEC_DEBUG
-	color = float4(color.a, color.a, color.a, 1.0);
 #endif
 
     return float4(color.xyz, color.a);

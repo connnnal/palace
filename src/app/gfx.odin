@@ -45,8 +45,8 @@ Gfx_Pass_Meta :: struct {
 gfx_pass_meta: [Gfx_Pass]Gfx_Pass_Meta = {
 	.Opaque = {vs = {}, ps = {}, back_to_front = false},
 	.Opaque_Texture = {vs = {}, ps = {}, back_to_front = false},
-	.Expensive = {vs = {texture = .Yes, rounded = .Yes}, ps = {texture = .Yes, rounded = .Yes}, back_to_front = true},
-	.Glass = {vs = {rounded = .Yes}, ps = {glass = .Yes, rounded = .Yes}, back_to_front = true},
+	.Expensive = {vs = {texture = .Yes, rounded = .Yes, border = .Yes}, ps = {texture = .Yes, rounded = .Yes, border = .Yes}, back_to_front = true},
+	.Glass = {vs = {rounded = .Yes, border = .Yes}, ps = {glass = .Yes, rounded = .Yes, border = .Yes}, back_to_front = true},
 }
 
 Gfx_Pass_Offscreen :: enum {
@@ -86,7 +86,7 @@ gfx_init :: proc "contextless" () {
 		hr = d3d12.GetDebugInterface(d3d12.IDebug1_UUID, cast(^rawptr)&debug)
 		check(hr, "failed to get debug interface")
 		debug->EnableDebugLayer()
-		debug->SetEnableGPUBasedValidation(true) // TODO: Place behind command line args.
+		debug->SetEnableGPUBasedValidation(false) // TODO: Place behind command line args.
 		debug->Release()
 
 		info_queue: ^dxgi.IInfoQueue
@@ -229,7 +229,7 @@ gfx_init :: proc "contextless" () {
 		}
 
 		hr = gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pipeline))
-		check(hr, "failed to create graphics pipeline")
+		checkf(hr, "failed to create graphics pipeline (meta: %#v)", meta)
 	}
 
 	gfx_descriptor_init()
@@ -307,7 +307,8 @@ Shader_Input_Layout :: #soa[MAX_DRAW_CMDS]struct {
 		// 	"llvm_backend_utility.cpp(1133): Assertion Failure: `is_type_pointer(s.type)`".
 		// 	393e00bec3e855475659de0c6c38d3898a36cb36.
 		inner:    bit_field u32 {
-			depth:    u32  | 28,
+			depth:    u32  | 16,
+			border:   u32  | 8,
 			round_tl: bool | 1,
 			round_tr: bool | 1,
 			round_bl: bool | 1,
@@ -862,6 +863,8 @@ gfx_attach_draw :: proc(
 	texc := [4]f32{},
 	texi := max(u32),
 	rounding: f32 = 0,
+	softness: f32 = 0,
+	border: u32 = 0,
 	rounding_corners: [4]bool = {},
 	depth: Maybe(u32) = nil,
 	test: bool = false,
@@ -869,8 +872,11 @@ gfx_attach_draw :: proc(
 	bucket_type: Gfx_Bucket
 	pass_type: Gfx_Pass
 	switch true {
-	case color.a < 1:
+	case color.a < 1, rounding > 0, softness > 0:
 		pass_type = .Expensive
+	case border > 0:
+		pass_type = .Expensive
+	// bucket_type = .Fore
 	case texi != max(u32):
 		pass_type = .Expensive
 	case texi != max(u32):
@@ -907,19 +913,17 @@ gfx_attach_draw :: proc(
 	pass.buf_mapped[buf][index].color[3] = color
 	pass.buf_mapped[buf][index].texc = texc
 	pass.buf_mapped[buf][index].texi = texi
-	pass.buf_mapped[buf][index].corner = 32
-	pass.buf_mapped[buf][index].softness = 0.1
-	pass.buf_mapped[buf][index].softness = 1
+	pass.buf_mapped[buf][index].corner = rounding
+	pass.buf_mapped[buf][index].softness = 1 + softness
 	pass.buf_mapped[buf][index].inner.round_tl = rounding_corners[0]
 	pass.buf_mapped[buf][index].inner.round_tr = rounding_corners[1]
 	pass.buf_mapped[buf][index].inner.round_bl = rounding_corners[2]
 	pass.buf_mapped[buf][index].inner.round_br = rounding_corners[3]
 	pass.buf_mapped[buf][index].inner.depth = depth
+	pass.buf_mapped[buf][index].inner.border = border
 }
 
 // https://vulkan-tutorial.com/Generating_Mipmaps#page_Image-creation.
 gfx_mips_for_resolution :: #force_inline proc "contextless" (size: [2]$T) -> int where intrinsics.type_is_integer(T) {
-	// floor_log2 := (size_of(T) * 8 - 1) - intrinsics.count_leading_zeros(max(size.x, size.y))
-	// return int(floor_log2 + 1)
 	return cast(int)bits.log2(linalg.max(size)) + 1
 }
