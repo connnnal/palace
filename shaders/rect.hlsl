@@ -17,7 +17,7 @@ struct InputPs {
     nointerpolation float2 shape_size : CSIZE;
 	                float2 shape_uv   : UVSHAPE;
 #endif
-					uint4  pack       : PACK;
+	nointerpolation uint4  pack       : PACK;
 };
 
 uint pack_texi(uint4 pack) {
@@ -38,7 +38,7 @@ float4 pack_rounding(uint4 pack) {
 		( pack.y & (0x8 << 24) ) ? radius : 0.f
 	);
 }
-float pack_softness(uint4 pack) {
+float pack_hardness(uint4 pack) {
 	return asfloat(pack.w);
 }
 
@@ -84,13 +84,12 @@ InputPs vs_main(InputVs input)
 #endif
 
 #if defined(SPEC_ROUNDED)
-	// TODO: What do we do this weird math for?
-	float softness = (1/pack_softness(input.pack))-1;
-	float inset = -softness;
-	float2 fac = (inset / 2) / shape_size;
+	// Hardness is a fraction, need to reason with pixels here.
+	float inset = 1 - 1 / pack_hardness(input.pack);
+	float2 fac = inset / (2 * shape_size);
 
 	output.shape_size = shape_size + inset;
-	output.shape_uv = uv + fac - fac*2*uv;
+	output.shape_uv = uv + (fac - 2 * uv * fac);
 #endif
 
 	output.pack = input.pack;
@@ -207,6 +206,7 @@ half FilterSdfTextureExact(half sdf, float2 uvCoordinate, half2 textureSize) {
 //
 // https://www.shadertoy.com/view/tlcBRl.
 //
+
 float noise1(float seed1,float seed2){
 	return(
 	frac(seed1+12.34567*
@@ -223,7 +223,7 @@ float4 ps_main(InputPs input) : SV_Target
 
 	uint texi = pack_texi(input.pack);
 	float4 corner = pack_rounding(input.pack);
-	float softness = pack_softness(input.pack);
+	float hardness = pack_hardness(input.pack);
 	float border = pack_border(input.pack);
 
 #ifdef SPEC_TEXTURE
@@ -244,8 +244,8 @@ float4 ps_main(InputPs input) : SV_Target
 		}
 	#endif
 
-	float alpha = FilterSdfTextureApproximative(-dist * softness, input.shape_uv, input.shape_size);
-	if (softness < 0.5) {
+	float alpha = FilterSdfTextureApproximative(-dist * hardness, input.shape_uv, input.shape_size);
+	if (hardness < 0.5) {
 		alpha = smoothstep(0,1,alpha);
 	}
 	color *= alpha;

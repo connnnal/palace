@@ -863,7 +863,7 @@ gfx_attach_draw :: proc(
 	texc := [4]f32{},
 	texi := max(u32),
 	rounding: f32 = 0,
-	softness: f32 = 0,
+	hardness: f32 = 1,
 	border: u32 = 0,
 	rounding_corners: [4]bool = {},
 	depth: Maybe(u32) = nil,
@@ -872,7 +872,7 @@ gfx_attach_draw :: proc(
 	bucket_type: Gfx_Bucket
 	pass_type: Gfx_Pass
 	switch true {
-	case color.a < 1, rounding > 0, softness > 0:
+	case color.a < 1, rounding > 0, hardness < 1:
 		pass_type = .Expensive
 	case border > 0:
 		pass_type = .Expensive
@@ -914,7 +914,7 @@ gfx_attach_draw :: proc(
 	pass.buf_mapped[buf][index].texc = texc
 	pass.buf_mapped[buf][index].texi = texi
 	pass.buf_mapped[buf][index].corner = rounding
-	pass.buf_mapped[buf][index].softness = 1 + softness
+	pass.buf_mapped[buf][index].softness = hardness
 	pass.buf_mapped[buf][index].inner.round_tl = rounding_corners[0]
 	pass.buf_mapped[buf][index].inner.round_tr = rounding_corners[1]
 	pass.buf_mapped[buf][index].inner.round_bl = rounding_corners[2]
