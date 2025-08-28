@@ -1,4 +1,4 @@
-package shaders
+package shadertool
 
 import "base:runtime"
 import "core:log"
@@ -12,7 +12,7 @@ Include_Handler :: struct {
 	ctx:                   runtime.Context,
 	allocator:             runtime.Allocator,
 	utils:                 ^dxc.IUtils,
-	referenced:            map[string]struct {},
+	referenced:            map[string]struct{},
 }
 
 include_handler_make :: proc(utils: ^dxc.IUtils, ctx := context, allocator := context.temp_allocator) -> Include_Handler {

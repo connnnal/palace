@@ -25,7 +25,7 @@ IF "%-instrument%"=="1" (
 :: Flags for all binaries.
 SET all_flags=
 IF NOT "%-nocollections%"=="1" (
-	SET all_flags=%all_flags% -collection:src=src -collection:lib=lib -collection:build=build
+	SET all_flags=%all_flags% -collection:lib=lib
 )
 IF "%-vet%"=="1" (
 	SET all_flags=%all_flags% -vet
@@ -63,11 +63,11 @@ IF "%-test%"=="1" (
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
 IF "%shadert%"=="1" (
-	odin build src/shadert -out:shadert.exe %all_flags% %app_flags% -keep-executable
+	odin build shadertool -out:shadertool.exe %all_flags% %app_flags% -keep-executable
 )
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
 IF "%app%"=="1" (
-	odin build src/app -out:palace.exe %all_flags% %app_flags% %app_vis_flags% -keep-executable
+	odin build src -out:palace.exe %all_flags% %app_flags% %app_vis_flags% -keep-executable
 )
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%

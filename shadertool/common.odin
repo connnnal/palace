@@ -1,20 +1,8 @@
-package common
+package shadertool
 
 import "base:runtime"
 import "core:log"
 import "core:os"
-
-import win "core:sys/windows"
-
-APP_NAME :: "Palace"
-
-check :: proc(hr: win.HRESULT, message: string, loc := #caller_location) {
-	log.assert(win.SUCCEEDED(hr), message, loc = loc)
-}
-
-checkf :: proc(hr: win.HRESULT, fmt_str: string, args: ..any, loc := #caller_location) {
-	log.assertf(win.SUCCEEDED(hr), fmt_str, ..args, loc = loc)
-}
 
 @(private)
 init_context :: proc "contextless" (c: ^runtime.Context) {

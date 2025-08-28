@@ -7,13 +7,6 @@ import "core:math/rand"
 import win "core:sys/windows"
 import "lib:superluminal"
 
-import "src:common"
-check :: common.check
-checkf :: common.checkf
-default_context :: common.default_context
-
-APP_NAME :: "Palace"
-
 Render :: struct {
 	attach: ^Gfx_Attach,
 }

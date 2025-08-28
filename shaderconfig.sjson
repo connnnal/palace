@@ -1,7 +1,7 @@
 shaders = [
 	{
 		name = "Root Signature"
-		source = "shaders/root_sig.hlsl"
+		source = "src/shaders/root_sig.hlsl"
 		lanes = [
 			{
 				name = "BASE"
@@ -13,7 +13,7 @@ shaders = [
 	}
 	{
 		name = "Rect VS"
-		source = "shaders/rect.hlsl"
+		source = "src/shaders/rect.hlsl"
 		lanes = [
 			{
 				name = "BASE"
@@ -46,7 +46,7 @@ shaders = [
 	}
 	{
 		name = "Rect PS"
-		source = "shaders/rect.hlsl"
+		source = "src/shaders/rect.hlsl"
 		lanes = [
 			{
 				name = "BASE"
@@ -86,7 +86,7 @@ shaders = [
 	}
 	{
 		name = "AMD Single Pass Downsampler"
-		source = "shaders/ffx_spd.hlsl"
+		source = "src/shaders/ffx_spd.hlsl"
 		include = [
 			"lib/FidelityFX-SDK/sdk/include/FidelityFX/gpu"
 		]
@@ -139,7 +139,7 @@ shaders = [
 	}
 	{
 		name = "AMD Blur"
-		source = "shaders/ffx_blur.hlsl"
+		source = "src/shaders/ffx_blur.hlsl"
 		include = [
 			"lib/FidelityFX-SDK/sdk/include/FidelityFX/gpu"
 		]
@@ -198,4 +198,4 @@ shaders = [
 	}
 ]
 
-out_dir = "build/shaders/"
+out_dir = "src/shaders/"

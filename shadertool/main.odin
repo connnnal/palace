@@ -1,4 +1,4 @@
-package shaders
+package shadertool
 
 import "base:intrinsics"
 import "base:runtime"
@@ -17,7 +17,6 @@ import "core:unicode"
 import "core:unicode/utf8"
 
 import "lib:superluminal"
-import "src:common"
 
 import win "core:sys/windows"
 import tp "lib:threadpool"
@@ -45,7 +44,7 @@ work_queue: struct {
 
 @(init)
 work_init :: proc "contextless" () {
-	context = common.default_context()
+	context = default_context()
 	// This allocator describes work to be done.
 	if err := virtual.arena_init_growing(&work_queue.arena); err != nil {
 		log.panicf("failed to init arena %q", err)
@@ -67,7 +66,7 @@ work_init :: proc "contextless" () {
 
 @(fini)
 work_fini :: proc "contextless" () {
-	context = common.default_context()
+	context = default_context()
 
 	work_flush()
 	work_reset()
@@ -106,7 +105,7 @@ work_enqueue :: proc(params: ^Compile_Work_Params) {
 
 	// TODO: Creating work per task may be expensive; we can re-use work if we move the queue into our app.
 	work_callback_wrapper :: proc "system" (instance: tp.PTP_CALLBACK_INSTANCE, parameter: win.PVOID, work: tp.PTP_WORK) {
-		context = common.default_context()
+		context = default_context()
 
 		parameter := cast(^Compile_Work_Params)parameter
 		work_callback(parameter)
@@ -453,7 +452,7 @@ main_ :: proc() -> Error {
 
 	// Concatenate into our output.
 	{
-		FILE_BLOB :: "output.bin"
+		FILE_BLOB :: "shaders.bin"
 		FILE_MANIFEST :: "shaders.odin"
 
 		b: strings.Builder
@@ -624,7 +623,7 @@ main_ :: proc() -> Error {
 }
 
 main :: proc() {
-	context = common.default_context()
+	context = default_context()
 
 	// Exit with a non-zero code so subsequent steps don't run.
 	if main_() != nil {

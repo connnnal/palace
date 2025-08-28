@@ -3,7 +3,6 @@
 /*.dll
 *.rdi
 *.bin
-.ninja_log
 .hash_log
 
 build/

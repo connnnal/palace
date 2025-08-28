@@ -4,8 +4,6 @@
 	"enable_hover": true,
 	"enable_snippets": true,
 	"collections": [
-		{ "name": "src", "path": "src" },
 		{ "name": "lib", "path": "lib" },
-		{ "name": "build", "path": "build" }
 	]
 }

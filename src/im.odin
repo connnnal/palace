@@ -12,7 +12,7 @@ import "core:mem/tlsf"
 import "core:strings"
 
 import "lib:superluminal"
-import va "src:virtual_array"
+import va "virtual_array"
 
 Id :: u32
 

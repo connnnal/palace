@@ -3,7 +3,7 @@ package main
 import "core:log"
 import "core:math/linalg"
 
-import "build:shaders"
+import "shaders"
 
 import win "core:sys/windows"
 import "vendor:directx/d3d12"

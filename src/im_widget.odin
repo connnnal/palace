@@ -8,7 +8,7 @@ import text_edit "core:text/edit"
 
 import win "core:sys/windows"
 import d2w "lib:odin_d2d_dwrite"
-import va "src:virtual_array"
+import va "virtual_array"
 
 handle_char_input :: proc(box: ^text_edit.State, codepoint: rune) {
 	switch codepoint {

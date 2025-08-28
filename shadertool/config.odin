@@ -1,4 +1,4 @@
-package shaders
+package shadertool
 
 import "base:intrinsics"
 import "base:runtime"

@@ -14,7 +14,7 @@ import "vendor:directx/dxgi"
 
 import "lib:superluminal"
 
-import "build:shaders"
+import "shaders"
 
 @(export, private, link_name = "NvOptimusEnablement")
 NvOptimusEnablement: u32 = 0x00000001

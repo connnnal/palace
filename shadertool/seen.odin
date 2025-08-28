@@ -1,4 +1,4 @@
-package shaders
+package shadertool
 
 import "base:runtime"
 import "core:encoding/cbor"
@@ -8,7 +8,6 @@ import "core:mem/virtual"
 import "core:os/os2"
 import "core:slice"
 import "core:strings"
-import "src:common"
 
 // Similar naming convention to Ninja.
 HASH_FILE :: ".hash_log"
@@ -41,7 +40,7 @@ d2_state: struct {
 
 @(init)
 d2_init :: proc "contextless" () {
-	context = common.default_context()
+	context = default_context()
 
 	if err := virtual.arena_init_growing(&d2_state.arena); err != nil {
 		log.panicf("failed to init arena %q", err)
@@ -63,7 +62,7 @@ d2_init :: proc "contextless" () {
 
 @(fini)
 d2_fini :: proc "contextless" () {
-	context = common.default_context()
+	context = default_context()
 	defer virtual.arena_destroy(&d2_state.arena)
 
 	// Prune old entries.

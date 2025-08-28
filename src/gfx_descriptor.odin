@@ -1,12 +1,11 @@
 package main
 
 import "core:log"
-import "src:common"
 
 import d3d12 "vendor:directx/d3d12"
 
 import oa "lib:offset_allocator"
-import sa "src:slot_array"
+import sa "slot_array"
 
 Gfx_Descriptor_Handle :: struct($T: d3d12.DESCRIPTOR_HEAP_TYPE, $C: u32) #raw_union {
 	slot:       sa.Handle,
@@ -75,7 +74,7 @@ gfx_descriptor_init :: proc() {
 }
 
 gfx_descriptor_fini :: proc "contextless" () {
-	context = common.default_context()
+	context = default_context()
 
 	for &heap in gfx_descriptor.heaps {
 		oa.destroy(&heap.heap)
