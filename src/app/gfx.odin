@@ -865,7 +865,7 @@ gfx_attach_draw :: proc(
 	rounding: f32 = 0,
 	hardness: f32 = 1,
 	border: u32 = 0,
-	rounding_corners: [4]bool = {},
+	rounding_corners: [4]bool = true,
 	depth: Maybe(u32) = nil,
 	test: bool = false,
 ) {
@@ -876,7 +876,6 @@ gfx_attach_draw :: proc(
 		pass_type = .Expensive
 	case border > 0:
 		pass_type = .Expensive
-	// bucket_type = .Fore
 	case texi != max(u32):
 		pass_type = .Expensive
 	case texi != max(u32):
