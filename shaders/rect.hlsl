@@ -184,6 +184,19 @@ half FilterSdfTextureExact(half sdf, float2 uvCoordinate, half2 textureSize) {
     return saturate(inverseLerp(-pixelFootprintDiameter, pixelFootprintDiameter, sdf));
 }
 
+//
+// https://www.shadertoy.com/view/tlcBRl.
+//
+float noise1(float seed1,float seed2){
+	return(
+	frac(seed1+12.34567*
+	frac(100.*(abs(seed1*0.91)+seed2+94.68)*
+	frac((abs(seed2*0.41)+45.46)*
+	frac((abs(seed2)+757.21)*
+	frac(seed1*0.0171))))))
+	* 1.0038 - 0.00185;
+}
+
 float4 ps_main(InputPs input) : SV_Target
 {
 	float4 color = input.color;
@@ -215,14 +228,17 @@ float4 ps_main(InputPs input) : SV_Target
 #endif
 
 #ifdef SPEC_GLASS
+	float2 input_pos_frac = input.pos.xy * drawConstants.viewport_inv;
+
 	Texture2D texture_prev = ResourceDescriptorHeap[drawConstants.accum_idx];
 	float3 accum = 0;
-	float power = 1;
-	for (int i = 0; i < 1; i++) {
-		accum += texture_prev.SampleLevel(sampler_wrap_linear, input.pos.xy * drawConstants.viewport_inv, i).xyz * power;
+	uint mip_start = 3;
+	uint mip_end = 7;
+	for (int i = mip_start; i < mip_end; i++) {
+		accum += texture_prev.SampleLevel(sampler_wrap_linear, input_pos_frac, i).xyz;
 	}
-	accum /= float(1);
-	color.xyz *= accum;
+	color.xyz *= accum / float(mip_end - mip_start);
+	color.xyz *= lerp( .95f, 1.f, noise1(input_pos_frac.x, input_pos_frac.y) );
 #endif
 
 #ifdef SPEC_DEBUG

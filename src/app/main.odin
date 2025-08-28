@@ -70,15 +70,15 @@ main :: proc() {
 
 						for i in 0 ..< 10 {
 							(frame % 50 < 10) or_break
-							node := im_leaf(id("child", i), {size = {32, 32}, color = p[.Content]})
+							node := im_leaf(id("child", i), {size = {32, 32}, color = p[.Text]})
 							im_widget_text_bind(node, {.Body, .SEMI_BOLD, .NORMAL, 16 + i32((frame + i) % 4), fmt.tprintf("hi!!! %v", frame)})
 						}
 						{
-							node := im_leaf(id("foo4"), {color = p[.Content]})
+							node := im_leaf(id("foo4"), {color = {1, 0, 1, 1}})
 							im_widget_text_bind(node, {.Special, .SEMI_BOLD, .NORMAL, 64, "hiya!!!!!!!!!!!!!!!!!!!!!!!"})
 						}
 						{
-							node := im_leaf(id("foo5"), {color = p[.Content]})
+							node := im_leaf(id("foo5"), {color = p[.Text]})
 							im_widget_text_bind(node, {.Special, .SEMI_BOLD, .NORMAL, 32, "0123456789"})
 						}
 						// im_leaf(id("foo2"), {color = p[.Midground], text = Text_Desc{.Body, .SEMI_BOLD, .NORMAL, 128, "ooooooooooooo"}})
@@ -95,7 +95,7 @@ main :: proc() {
 						if node := im_scope(id("button"), {padding = {32, 16}, color = p[.Void]}); true {
 							im_widget_button_bind(node, w, dt)
 
-							node := im_leaf(id("foo4"), {color = p[.Content]})
+							node := im_leaf(id("foo4"), {color = p[.Text]})
 							im_widget_text_bind(node, {.Special, .BLACK, .NORMAL, 24, "click me"})
 						}
 					}
@@ -129,7 +129,8 @@ main :: proc() {
 			im_widget_dyn_draw(render, v, v.wrapper)
 		}
 
-		gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {1, 0, 1, 1}, {}, rounding = 32, rounding_corners = {true, true, true, true}, test = true)
+		// gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {1, 0, 1, 1}, {}, rounding = 32, rounding_corners = {true, true, true, true}, test = true)
+		gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, p[.Void], {}, rounding = 32, rounding_corners = {true, true, true, true}, test = true)
 	}
 
 	wind_open(&w)

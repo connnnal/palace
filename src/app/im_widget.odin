@@ -324,7 +324,7 @@ im_widget_text_bind :: proc(node: ^Im_Node, desc: Text_Desc) {
 im_widget_text_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Text) {
 	text: {
 		layout := text_state_get_valid_layout(&this.text) or_break text
-		layout->Draw(&Glyph_Draw_Meta{render, p[.Text]}, &glyph_renderer, f32(node.measure.pos.x), f32(node.measure.pos.y))
+		layout->Draw(&Glyph_Draw_Meta{render, node.color}, &glyph_renderer, f32(node.measure.pos.x), f32(node.measure.pos.y))
 	}
 }
 im_widget_text_destroy :: proc(node: ^Im_Node, this: ^Im_Widget_Text) {

@@ -1,12 +1,12 @@
 package main
 
+import "base:intrinsics"
 import "base:runtime"
 import "core:fmt"
 import "core:log"
+import "core:math/bits"
 import "core:math/linalg"
-import "core:mem"
 import "core:reflect"
-import "core:strings"
 
 import win "core:sys/windows"
 import "vendor:directx/d3d12"
@@ -86,7 +86,7 @@ gfx_init :: proc "contextless" () {
 		hr = d3d12.GetDebugInterface(d3d12.IDebug1_UUID, cast(^rawptr)&debug)
 		check(hr, "failed to get debug interface")
 		debug->EnableDebugLayer()
-		debug->SetEnableGPUBasedValidation(false) // TODO: Place behind command line args.
+		debug->SetEnableGPUBasedValidation(true) // TODO: Place behind command line args.
 		debug->Release()
 
 		info_queue: ^dxgi.IInfoQueue
@@ -253,7 +253,6 @@ gfx_fini :: proc "contextless" () {
 	gfx_state.dxgi_factory->Release()
 	gfx_state.root_sig->Release()
 	gfx_state.halt_fence->Release()
-	// gfx_state.heap->Release()
 
 	gfx_ffx_fini()
 }
@@ -339,7 +338,7 @@ Gfx_Attach :: struct {
 	swapchain_res:      [2]u32,
 	// Depth.
 	depth_stencil:      ^d3d12.IResource,
-	depth_stencil_view: Gfx_Descriptor_Handle,
+	depth_stencil_view: Gfx_Descriptor_Handle(.DSV, 1),
 	// Cmds.
 	cmd_list:           ^d3d12.IGraphicsCommandList,
 	cmd_allocators:     [BUFFER_COUNT]^d3d12.ICommandAllocator,
@@ -350,12 +349,13 @@ Gfx_Attach :: struct {
 	buckets:            [Gfx_Bucket]Gfx_Bucket_Cmd,
 	// TODO: Simplify this.
 	offscreen:          [Gfx_Pass_Offscreen]struct {
-		texture:  ^d3d12.IResource,
-		rtv, srv: Gfx_Descriptor_Handle,
+		texture: ^d3d12.IResource,
+		rtv:     Gfx_Descriptor_Handle(.RTV, 1),
+		srv:     Gfx_Descriptor_Handle(.CBV_SRV_UAV, 1),
 	},
 	// Ffx.
 	ffx_blur:           Gfx_Ffx_Blur_Context,
-	ffx_blur_cmd:       Gfx_Ffx_Blur_Cmd,
+	ffx_spd:            Gfx_Ffx_Spd_Context,
 }
 
 // TODO: We need to rethink this whole concept. Pathalogical case where size is {0,0} -> no init -> crash..!
@@ -425,7 +425,7 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 
 	// Depth.
 	when initial {
-		a.depth_stencil_view = gfx_descriptor_alloc(.DSV)
+		gfx_descriptor_alloc(&a.depth_stencil_view)
 	} else {
 		a.depth_stencil->Release()
 	}
@@ -462,10 +462,11 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 	}
 
 	// Offscreen temp buffer.
+	mip_count := cast(u16)gfx_mips_for_resolution(a.swapchain_res)
 	for &pack, type in a.offscreen {
 		when initial {
-			pack.rtv = gfx_descriptor_alloc(.RTV)
-			pack.srv = gfx_descriptor_alloc(.CBV_SRV_UAV)
+			gfx_descriptor_alloc(&pack.rtv)
+			gfx_descriptor_alloc(&pack.srv)
 		} else {
 			pack.texture->Release()
 		}
@@ -481,7 +482,7 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 					Width = u64(res.x),
 					Height = res.y,
 					DepthOrArraySize = 1,
-					MipLevels = 11,
+					MipLevels = 1,
 					Format = SWAPCHAIN_FORMAT,
 					SampleDesc = {1, 0},
 					Layout = .UNKNOWN,
@@ -489,6 +490,27 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 				},
 				{.RENDER_TARGET},
 				&{Format = SWAPCHAIN_FORMAT, Color = COLOR_CLEAR},
+				d3d12.IResource_UUID,
+				(^rawptr)(&pack.texture),
+			)
+		case .Working:
+			hr =
+			gfx_state.device->CreateCommittedResource(
+				&{Type = .DEFAULT},
+				{},
+				&{
+					Dimension = .TEXTURE2D,
+					Width = u64(res.x),
+					Height = res.y,
+					DepthOrArraySize = 1,
+					MipLevels = mip_count,
+					Format = SWAPCHAIN_FORMAT,
+					SampleDesc = {1, 0},
+					Layout = .UNKNOWN,
+					Flags = {.ALLOW_UNORDERED_ACCESS},
+				},
+				{.PIXEL_SHADER_RESOURCE},
+				nil,
 				d3d12.IResource_UUID,
 				(^rawptr)(&pack.texture),
 			)
@@ -502,7 +524,7 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 					Width = u64(res.x),
 					Height = res.y,
 					DepthOrArraySize = 1,
-					MipLevels = 11,
+					MipLevels = mip_count,
 					Format = SWAPCHAIN_FORMAT,
 					SampleDesc = {1, 0},
 					Layout = .UNKNOWN,
@@ -513,7 +535,7 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 				d3d12.IResource_UUID,
 				(^rawptr)(&pack.texture),
 			)
-		case .Working, .Output:
+		case .Output:
 			hr =
 			gfx_state.device->CreateCommittedResource(
 				&{Type = .DEFAULT},
@@ -537,9 +559,7 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 		}
 		check(hr, "failed to create temp texture")
 
-		name := fmt.tprintf("Offscreen render buffer %s", type)
-		name_l := win.utf8_to_wstring(name, context.temp_allocator)
-		pack.texture->SetName(name_l)
+		pack.texture->SetName(win.utf8_to_wstring(fmt.tprintf("Offscreen render buffer %s", type)))
 
 		if type == .Render {
 			handle := gfx_descriptor_cpu(pack.rtv)
@@ -602,6 +622,9 @@ gfx_attach :: proc(wnd: win.HWND, allocator := context.allocator) -> ^Gfx_Attach
 		}
 	}
 
+	gfx_ffx_blur_make(&attach.ffx_blur)
+	gfx_ffx_spd_make(&attach.ffx_spd)
+
 	return attach
 }
 
@@ -621,6 +644,7 @@ gfx_detach :: proc(a: ^Gfx_Attach, allocator := context.allocator) {
 	}
 
 	gfx_ffx_blur_destroy(&a.ffx_blur)
+	gfx_ffx_spd_destroy(&a.ffx_spd)
 
 	for v in a.swapchain_rts {v->Release()}
 	a.swapchain->Release()
@@ -635,13 +659,6 @@ gfx_detach :: proc(a: ^Gfx_Attach, allocator := context.allocator) {
 }
 
 gfx_render :: proc(a: ^Gfx_Attach) {
-	@(static) first := true
-	if first {
-		defer first = false
-		gfx_ffx_blur_make(&a.ffx_blur)
-		a.ffx_blur_cmd = gfx_ffx_blur_cmd(&a.ffx_blur, a.offscreen[.Render].texture, a.offscreen[.Downsample].texture, 0, 0)
-	}
-
 	// TODO: We can skip rendering when our framebuffer is zero-sized, but we MUST always present.
 	hr: win.HRESULT
 
@@ -663,6 +680,8 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 	hr = a.cmd_list->Reset(a.cmd_allocators[bb_idx], nil)
 	check(hr, "failed to reset command list")
 
+	a.cmd_list->SetDescriptorHeaps(1, &gfx_descriptor.heaps[.CBV_SRV_UAV].resource)
+
 	// TODO: Where do we want to put this?
 	glyph_pass_cook(a.cmd_list, bb_idx)
 	glyph_draw()
@@ -679,26 +698,27 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 	a.cmd_list->OMSetRenderTargets(1, &color_view, win.TRUE, &depth_stencil_view)
 	a.cmd_list->ClearRenderTargetView(color_view, &[?]f32{100.0 / 255, 118.0 / 255, 140.0 / 255, 1.0}, 0, nil)
 
-	for &bucket, i in a.buckets {
+	gfx_ffx_blur_frame(&a.ffx_blur, bb_idx)
+	gfx_ffx_spd_frame(&a.ffx_spd, bb_idx)
+
+	for &bucket in a.buckets {
 		a.cmd_list->ClearDepthStencilView(depth_stencil_view, {.DEPTH}, DEPTH_STENCIL_CLEAR.Depth, DEPTH_STENCIL_CLEAR.Stencil, 0, nil)
 
 		// "SetDescriptorHeaps must be called first.."
 		// https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_DynamicResources.html#setdescriptorheaps-and-setrootsignature.
-		a.cmd_list->SetDescriptorHeaps(1, &gfx_descriptor.heaps[.CBV_SRV_UAV].resource)
 		a.cmd_list->SetGraphicsRootSignature(gfx_state.root_sig)
 		{
-			Scene_Constants :: struct {
+			constants: struct #packed {
 				viewport:     [2]f32,
 				viewport_inv: [2]f32,
 				accum_idx:    u32,
 			}
-			viewport := [2]f32{f32(a.swapchain_res.x), f32(a.swapchain_res.y)}
-			a.cmd_list->SetGraphicsRoot32BitConstants(
-				0,
-				size_of(Scene_Constants) / size_of(u32),
-				&Scene_Constants{viewport, 1 / viewport, a.offscreen[.Downsample].srv.idx},
-				0,
-			)
+
+			constants.viewport = {f32(a.swapchain_res.x), f32(a.swapchain_res.y)}
+			constants.viewport_inv = 1 / constants.viewport
+			constants.accum_idx = cast(u32)gfx_descriptor_idx(a.offscreen[.Downsample].srv)
+
+			a.cmd_list->SetGraphicsRoot32BitConstants(0, size_of(constants) / size_of(u32), &constants, 0)
 		}
 
 		defer bucket.total = 0
@@ -723,6 +743,8 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 			a.cmd_list->SetPipelineState(gfx_state.pipelines[pass_type])
 			a.cmd_list->DrawInstanced(4, count, 0, u32(index))
 		}
+
+		// Downsample colour output buffer.
 		{
 			barriers := [?]d3d12.RESOURCE_BARRIER {
 				{
@@ -731,21 +753,14 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 				},
 				{
 					Type = .TRANSITION,
-					Transition = {
-						a.offscreen[.Downsample].texture,
-						d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-						{.PIXEL_SHADER_RESOURCE},
-						{.NON_PIXEL_SHADER_RESOURCE},
-					},
+					Transition = {a.offscreen[.Working].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS}},
 				},
 			}
 			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
 		}
+		gfx_ffx_spd_mount(&a.ffx_spd, a.cmd_list, a.offscreen[.Render].texture, a.offscreen[.Working].texture)
 
-		{
-			gfx_ffx_blur_mount(&a.ffx_blur_cmd, a.cmd_list)
-		}
-
+		// Select a few mips to use for blurring.
 		{
 			barriers := [?]d3d12.RESOURCE_BARRIER {
 				{
@@ -754,12 +769,28 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 				},
 				{
 					Type = .TRANSITION,
-					Transition = {
-						a.offscreen[.Downsample].texture,
-						d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-						{.NON_PIXEL_SHADER_RESOURCE},
-						{.PIXEL_SHADER_RESOURCE},
-					},
+					Transition = {a.offscreen[.Working].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.UNORDERED_ACCESS}, {.NON_PIXEL_SHADER_RESOURCE}},
+				},
+				{
+					Type = .TRANSITION,
+					Transition = {a.offscreen[.Downsample].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.PIXEL_SHADER_RESOURCE}, {.UNORDERED_ACCESS}},
+				},
+			}
+			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
+		}
+		mip_count := gfx_mips_for_resolution(a.swapchain_res)
+		for mip in 1 ..< u32(mip_count) {
+			gfx_ffx_blur_mount(&a.ffx_blur, a.cmd_list, a.offscreen[.Working].texture, a.offscreen[.Downsample].texture, mip, mip)
+		}
+		{
+			barriers := [?]d3d12.RESOURCE_BARRIER {
+				{
+					Type = .TRANSITION,
+					Transition = {a.offscreen[.Working].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.NON_PIXEL_SHADER_RESOURCE}, {.PIXEL_SHADER_RESOURCE}},
+				},
+				{
+					Type = .TRANSITION,
+					Transition = {a.offscreen[.Downsample].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.UNORDERED_ACCESS}, {.PIXEL_SHADER_RESOURCE}},
 				},
 			}
 			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
@@ -884,4 +915,11 @@ gfx_attach_draw :: proc(
 	pass.buf_mapped[buf][index].inner.round_bl = rounding_corners[2]
 	pass.buf_mapped[buf][index].inner.round_br = rounding_corners[3]
 	pass.buf_mapped[buf][index].inner.depth = depth
+}
+
+// https://vulkan-tutorial.com/Generating_Mipmaps#page_Image-creation.
+gfx_mips_for_resolution :: #force_inline proc "contextless" (size: [2]$T) -> int where intrinsics.type_is_integer(T) {
+	// floor_log2 := (size_of(T) * 8 - 1) - intrinsics.count_leading_zeros(max(size.x, size.y))
+	// return int(floor_log2 + 1)
+	return cast(int)bits.log2(linalg.max(size)) + 1
 }

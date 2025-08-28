@@ -10,7 +10,7 @@
 		"addressV = TEXTURE_ADDRESS_WRAP," \
 		"addressW = TEXTURE_ADDRESS_WRAP)," \
 	"StaticSampler(s101, visibility = SHADER_VISIBILITY_PIXEL," \
-		"filter = FILTER_MIN_MAG_POINT_MIP_LINEAR," \
-		"addressU = TEXTURE_ADDRESS_WRAP," \
-		"addressV = TEXTURE_ADDRESS_WRAP," \
-		"addressW = TEXTURE_ADDRESS_WRAP)," \
+		"filter = FILTER_MIN_MAG_LINEAR_MIP_POINT," \
+		"addressU = TEXTURE_ADDRESS_CLAMP," \
+		"addressV = TEXTURE_ADDRESS_CLAMP," \
+		"addressW = TEXTURE_ADDRESS_CLAMP)," \

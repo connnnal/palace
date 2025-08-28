@@ -187,38 +187,6 @@ work_callback :: proc(params: ^Compile_Work_Params) {
 		log.warnf("%q remarks: %s", shader_name, result_slice)
 	}
 
-	when false {
-		if result->HasOutput(.REFLECTION) {
-			contents: ^dxc.IBlob
-			hr = result->GetOutput(.REFLECTION, dxc.IBlob_UUID, &contents, nil)
-			log.assertf(win.SUCCEEDED(hr), "failed to query reflection on %q", shader_name)
-			defer contents->Release()
-
-			// log.info(contents->GetBufferPointer(), contents->GetBufferSize())
-
-			// result_slice := ([^]byte)(contents->GetBufferPointer())[:contents->GetBufferSize()]
-			// log.assertf(len(result_slice) > 0, "no reflection info on %q", shader_name)
-
-			tingy := dxc.Buffer{contents->GetBufferPointer(), contents->GetBufferSize(), dxc.CP_ACP}
-			// log.info(tingy)
-
-			reflection: ^d3d12.IShaderReflection
-			hr = utils->CreateReflection(&tingy, d3d12.IShaderReflection_UUID, (^rawptr)(&reflection))
-			log.assertf(win.SUCCEEDED(hr), "failed to create reflection structure for %q", shader_name)
-			defer reflection->Release()
-
-			desc: d3d12.SHADER_DESC
-			reflection->GetDesc(&desc)
-
-			// log.info(desc)
-			log.info("def count", desc.DefCount)
-		}
-	}
-
-	if result->HasOutput(.ROOT_SIGNATURE) {
-		log.info("root")
-	}
-
 	status: win.HRESULT
 	hr = result->GetStatus(&status)
 	log.assertf(win.SUCCEEDED(hr), "failed to query status for %q", shader_name)
@@ -390,9 +358,9 @@ main_ :: proc() -> Error {
 
 			// Collect all compiler arguments from this tweak combination.
 			arguments: [dynamic]win.wstring
-			append(&arguments, "-Qstrip_debug")
-			append(&arguments, "-Qstrip_reflect")
-			append(&arguments, "-Qstrip_priv")
+			// append(&arguments, "-Qstrip_debug")
+			// append(&arguments, "-Qstrip_reflect")
+			// append(&arguments, "-Qstrip_priv")
 			append(&arguments, "-ffinite-math-only")
 			append(&arguments, "-Ges") // dxc.ARG_ENABLE_STRICTNESS
 			append(&arguments, "-WX") // dxc.ARG_WARNINGS_ARE_ERRORS
@@ -627,7 +595,7 @@ main_ :: proc() -> Error {
 				fmt.sbprintfln(&b, "%i}", out_offset)
 			}
 			fmt.sbprintln(&b, "\t#no_bounds_check slice := SOURCE_BLOB[inner[idx + 0]:inner[idx + 1]]")
-			fmt.sbprintln(&b, "\treturn { raw_data(slice), cast(uint)len(slice) }")
+			fmt.sbprintln(&b, "\treturn { raw_data(slice), len(slice) }")
 			fmt.sbprintln(&b, "}")
 		}
 

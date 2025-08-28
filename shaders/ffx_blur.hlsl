@@ -47,7 +47,7 @@
 
 #define CUSTOM_ROOT_SIG \
 	"RootConstants(num32BitConstants=2, b0)," \
-	"DescriptorTable( SRV(t0, flags=DATA_VOLATILE), UAV(u0) )," \
+	"DescriptorTable( SRV(t0, flags=DATA_VOLATILE), UAV(u0, flags=DATA_VOLATILE) )," \
 
 FFX_PREFER_WAVE64
 FFX_BLUR_NUM_THREADS

@@ -26,7 +26,7 @@ Glyph_Page :: struct #no_copy {
 	using node: list.Node,
 	descriptor: d3d12.CPU_DESCRIPTOR_HANDLE,
 	texture:    ^d3d12.IResource,
-	srv:        Gfx_Descriptor_Handle,
+	srv:        Gfx_Descriptor_Handle(.CBV_SRV_UAV, 1),
 	pack:       rect_pack.Context,
 	// TODO: Double-check this working memory is sufficient.
 	pack_nodes: [128]rect_pack.Node,
@@ -56,7 +56,7 @@ Glyph_Run_Pending :: struct {
 Glyph_Cached :: struct {
 	page_idx:   int,
 	// TODO: Storing this here is very silly.
-	page_srv:   Gfx_Descriptor_Handle,
+	page_srv:   Gfx_Descriptor_Handle(.CBV_SRV_UAV, 1),
 	x, y, w, h: int,
 	off:        [2]int,
 }
@@ -151,7 +151,7 @@ glyph_page_new :: proc() -> ^Glyph_Page {
 		checkf(hr, "failed to create texture atlas (index %v)", count)
 	}
 	{
-		page.srv = gfx_descriptor_alloc(.CBV_SRV_UAV)
+		gfx_descriptor_alloc(&page.srv)
 		handle := gfx_descriptor_cpu(page.srv)
 
 		gfx_state.device->CreateShaderResourceView(
@@ -359,7 +359,7 @@ glyph_draw :: proc() {
 				{f32(rect.glyph.w), f32(rect.glyph.h)},
 				rect.color,
 				{f32(rect.glyph.x), f32(rect.glyph.w), f32(rect.glyph.y), f32(rect.glyph.h)} / f32(GLYPH_TEX_LENGTH),
-				texi = rect.glyph.page_srv.idx,
+				texi = cast(u32)gfx_descriptor_idx(rect.glyph.page_srv),
 				depth = v.depth,
 			)
 		}
