@@ -234,7 +234,7 @@ float4 ps_main(InputPs input) : SV_Target
 #endif
 
 #ifdef SPEC_ROUNDED
-	float dist = sdRoundBox((input.shape_uv*2-1)*input.shape_size, input.shape_size, corner, 2);
+	float dist = sdRoundBox((input.shape_uv*2-1)*input.shape_size, input.shape_size, corner, 1);
 
 	#ifdef SPEC_BORDER
 		if (border > 0) {

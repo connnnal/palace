@@ -106,19 +106,15 @@ TOP_BINS_INDEX_SHIFT :: 3
 LEAF_BINS_INDEX_MASK :: 0x7
 NUM_LEAF_BINS :: NUM_TOP_BINS * BINS_PER_LEAF
 
-// Node_Index :: distinct u32
 Node_Index :: distinct u16
 INVALID_INDEX :: max(Node_Index)
 
+// TODO: We could make this smaller if we merged "used" as a bitfield.
 Node :: struct {
 	data_offset, data_size:                                     u32,
 	// TODO: Algorithm expects initialisation as "UNUSED". Expect zero instead.
 	bin_list_prev, bin_list_next, neighbor_prev, neighbor_next: Node_Index,
 	used:                                                       bool,
-	// using inner:                                                bit_field u32 {
-	// 	data_size: u32  | 31,
-	// 	used:      bool | 1,
-	// },
 }
 NODE_DEFAULT :: Node{0, 0, INVALID_INDEX, INVALID_INDEX, INVALID_INDEX, INVALID_INDEX, false}
 
@@ -136,8 +132,8 @@ Offset_Allocator :: struct {
 }
 
 Allocation :: struct {
-	offset: u32,
-	index:  Node_Index,
+	offset:   u32,
+	metadata: Node_Index,
 }
 
 Storage_Report :: struct {
@@ -259,10 +255,10 @@ allocate :: proc(m: ^Offset_Allocator, size: u32) -> (Allocation, bool) #optiona
 }
 
 free :: proc(m: ^Offset_Allocator, allocation: Allocation) {
-	assert(allocation.index != INVALID_INDEX)
+	assert(allocation.metadata != INVALID_INDEX)
 	assert(m.nodes != nil)
 
-	node_index := allocation.index
+	node_index := allocation.metadata
 	node := &m.nodes[node_index]
 
 	assert(node.used == true)

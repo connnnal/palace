@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:container/intrusive/list"
 import "core:log"
 import "core:math"
+import "core:math/bits"
 import "core:mem"
 import "core:mem/virtual"
 import "core:slice"
@@ -18,6 +19,9 @@ GLYPH_TEX_LENGTH :: 1024
 GLYPH_UPLOAD_SIZE :: mem.Megabyte // Per backbuffer.
 GLYPH_X_SLOPS :: 4
 GLYPH_COLOR := superluminal.MAKE_COLOR(255, 150, 0)
+
+// They're probably slow to create, consider creating at startup before they're required.
+GLYPH_PAGE_PREWARM_COUNT :: 1
 
 DWRITE_IDENTITY :: d2w.DWRITE_MATRIX{1, 0, 0, 1, 0, 0}
 
@@ -36,9 +40,9 @@ Glyph_Key :: struct {
 	// This ptr must be consistent.
 	// We rely on DWrite de-duplicating the returned FontFace object.
 	face:    ^d2w.IDWriteFontFace3,
-	index:   u16,
 	size:    f32,
-	x_shift: int,
+	index:   u16,
+	x_shift: u16,
 }
 
 Glyph_Run_Draw :: struct {
@@ -54,9 +58,9 @@ Glyph_Run_Pending :: struct {
 }
 
 Glyph_Cached :: struct {
-	page_idx:   int,
-	// TODO: Storing this here is very silly.
-	page_srv:   Gfx_Descriptor_Handle(.CBV_SRV_UAV, 1),
+	// It's possible a glyph is empty (i.e. the "space" character),
+	// in which case we won't rasterize nor assign it a page.
+	page:       Maybe(^Glyph_Page),
 	x, y, w, h: int,
 	off:        [2]int,
 }
@@ -90,6 +94,7 @@ glyph_init :: proc "contextless" () {
 	glyph_state.pending.allocator = glyph_state.allocator
 	reserve(&glyph_state.pending, 256)
 	glyph_state.draws.allocator = glyph_state.allocator
+	reserve(&glyph_state.draws, 256)
 
 	hr := gfx_state.device->CreateCommittedResource(
 		&{Type = .UPLOAD},
@@ -104,6 +109,10 @@ glyph_init :: proc "contextless" () {
 
 	hr = glyph_state.upload->Map(0, &{}, (^rawptr)(&glyph_state.upload_map))
 	check(hr, "failed to map glyph upload buffer")
+
+	for _ in 0 ..< GLYPH_PAGE_PREWARM_COUNT {
+		glyph_page_new()
+	}
 }
 
 @(private, fini)
@@ -188,35 +197,37 @@ glyph_pass_cook :: proc(cmd_list: ^d3d12.IGraphicsCommandList, #any_int buffer_i
 	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 	context.allocator = context.temp_allocator
 
-	Glyph_Pending :: struct {
+	Glyph_To_Pack :: struct {
 		pack:     rect_pack.Rect,
 		analysis: ^d2w.IDWriteGlyphRunAnalysis,
 		bounds:   win.RECT,
 		out:      ^Glyph_Cached,
 	}
 
-	filter_packed :: proc(existing: #soa[]Glyph_Pending, allocator := context.temp_allocator) -> #soa[]Glyph_Pending {
+	filter_packed :: proc(existing: #soa[]Glyph_To_Pack, allocator := context.temp_allocator) -> #soa[]Glyph_To_Pack {
 		count := 0
 		for v in existing {
 			count += v.pack.was_packed ? 1 : 0
 		}
-		out := make(#soa[]Glyph_Pending, count, allocator)
+		out := make(#soa[]Glyph_To_Pack, count, allocator)
 		count = 0
 		#no_bounds_check for v in existing {
 			(!v.pack.was_packed) or_continue
-			defer count += 1
 			out[count] = v
+			count += 1
 		}
 		return out
 	}
-	to_pack := make(#soa[]Glyph_Pending, len(glyph_state.pending), context.temp_allocator)
+	to_pack := make(#soa[]Glyph_To_Pack, len(glyph_state.pending), context.temp_allocator)
 
 	TEXTURE_TYPE :: d2w.DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_ALIASED_1x1
 	ANTIALIAS_MODE :: d2w.DWRITE_TEXT_ANTIALIAS_MODE.GRAYSCALE
 	BYTES_PER_PIXEL :: 1
 
-	upload_offset := GLYPH_UPLOAD_SIZE * buffer_idx
-	upload_limit := upload_offset + GLYPH_UPLOAD_SIZE
+	// The suggested render parameters can yield lower-quality rasterization.
+	// Especially at lower font sizes, this can harm quality without improving legibility.
+	// This actually matches 1:1 with Direct2D's behaviour.
+	USE_DWRITE_HEURISTIC :: false
 
 	hr: win.HRESULT
 
@@ -232,18 +243,20 @@ glyph_pass_cook :: proc(cmd_list: ^d3d12.IGraphicsCommandList, #any_int buffer_i
 			glyphOffsets = &{f32(key.x_shift) / GLYPH_X_SLOPS, 0},
 		}
 
-		// TODO: We could de-duplicate this.
+		transform := DWRITE_IDENTITY
 		rendering_mode: d2w.DWRITE_RENDERING_MODE1
 		grid_fit_mode: d2w.DWRITE_GRID_FIT_MODE
-		transform := DWRITE_IDENTITY
-		hr = key.face->GetRecommendedRenderingMode3(run.fontEmSize, 1, 1, &transform, false, .ANTIALIASED, .NATURAL, nil, &rendering_mode, &grid_fit_mode)
-		check(hr, "failed to get recommended rendering mode")
+		when USE_DWRITE_HEURISTIC {
+			hr = key.face->GetRecommendedRenderingMode3(run.fontEmSize, 1, 1, &transform, false, .ANTIALIASED, .NATURAL, nil, &rendering_mode, &grid_fit_mode)
+			check(hr, "failed to get recommended rendering mode")
+		} else {
+			// This is what the heuristic returns in most cases? See above comment.
+			rendering_mode = .NATURAL_SYMMETRIC
+			grid_fit_mode = .ENABLED
+		}
 
 		#no_bounds_check pending := &to_pack[i]
 		pending.out = glyph_state.discovery[key] or_else log.panicf("no key for %q", key)
-
-		// TODO: This produces higher quality results, but goes against heuristic.
-		rendering_mode = .NATURAL_SYMMETRIC
 
 		hr = text_state.factory->CreateGlyphRunAnalysis2(&run, &transform, rendering_mode, .NATURAL, grid_fit_mode, ANTIALIAS_MODE, 0, 0, &pending.analysis)
 		check(hr, "failed to create glyph run analysis")
@@ -255,49 +268,51 @@ glyph_pass_cook :: proc(cmd_list: ^d3d12.IGraphicsCommandList, #any_int buffer_i
 		pending.pack.h = rect_pack.Coord(pending.bounds.bottom - pending.bounds.top)
 	}
 
+	// Retain our initial set of pending glyphs. We need to free all this DWrite stuff...
+	all_ever_pending := to_pack
+	defer for v in all_ever_pending {
+		v.analysis->Release()
+	}
+
 	// Share a buffer between all glyphs to reduce memory allocations.
 	buf: [][BYTES_PER_PIXEL]u8
 
-	page_idx := 0
+	upload_offset := GLYPH_UPLOAD_SIZE * buffer_idx
+	upload_limit := upload_offset + GLYPH_UPLOAD_SIZE
+
 	it := list.iterator_head(glyph_state.pages, Glyph_Page, "node")
 	for {
-		defer page_idx += 1
-
 		// Try existing pages before creating new ones.
-		// TODO: We need to handle glyphs too big to ever fit in an atlas.
 		page := list.iterate_next(&it) or_else glyph_page_new()
 
 		all_packed := rect_pack.pack_rects(&page.pack, to_pack.pack, cast(i32)len(to_pack))
-		page_empty := page.pack.num_nodes == 0
 		any_packed := false
 
 		for &v in to_pack {
-			any_packed ||= v.pack.was_packed
 			(v.pack.was_packed) or_continue
 
+			// We don't need to rasterize zero-size glyphs.
 			width := int(v.pack.w)
 			height := int(v.pack.h)
-
-			// No special case for spaces etc. Still glyphs.
 			(width > 0 && height > 0) or_continue
 
-			if required := width * height; required > len(buf) {
+			// Allocate sufficient space for storing our rasteriation result.
+			if required := uint(width * height); required > len(buf) {
 				delete(buf)
-				// Align up for some extra space; reduce the frequency at which we allocate.
-				buf = make([][BYTES_PER_PIXEL]u8, mem.align_forward_int(required, 2048), context.temp_allocator)
+				// Align up to the next power of two.
+				excess_reservation := 0x2 << cast(u32)bits.log2(required)
+				buf = make([][BYTES_PER_PIXEL]u8, excess_reservation, context.temp_allocator)
 			}
 
-			{
-				buf := slice.to_bytes(buf)
-				hr = v.analysis->CreateAlphaTexture(TEXTURE_TYPE, &v.bounds, raw_data(buf), auto_cast len(buf))
-				check(hr, "failed to create alpha texture")
-			}
+			buf_bytes := slice.to_bytes(buf)
+			hr = v.analysis->CreateAlphaTexture(TEXTURE_TYPE, &v.bounds, raw_data(buf_bytes), cast(u32)len(buf_bytes))
+			check(hr, "failed to create alpha texture")
 
-			// TODO: We can easily overflow here.
+			// TODO: We need a proper upload system, we can easily hit this per-frame limit!
 			aligned_width := mem.align_forward_int(width, d3d12.TEXTURE_DATA_PITCH_ALIGNMENT)
 			glyph_start := upload_offset
 			glyph_end := glyph_start + int(height) * aligned_width
-			log.assert(glyph_end <= upload_limit, "upload overflow")
+			log.assert(glyph_end <= upload_limit, "upload buffer exhausted")
 			for r in 0 ..< height {
 				mem.copy_non_overlapping(&glyph_state.upload_map[glyph_start + r * aligned_width], &buf[r * width], width)
 			}
@@ -325,20 +340,20 @@ glyph_pass_cook :: proc(cmd_list: ^d3d12.IGraphicsCommandList, #any_int buffer_i
 			copy_dst: d3d12.TEXTURE_COPY_LOCATION
 			copy_dst.pResource = page.texture
 			copy_dst.Type = .SUBRESOURCE_INDEX
-			copy_dst.SubresourceIndex = u32(0)
+			copy_dst.SubresourceIndex = 0
 
 			cmd_list->CopyTextureRegion(&copy_dst, u32(v.pack.x), u32(v.pack.y), 0, &copy_src, nil)
 
 			// Save results.
-			v.out^ = {page_idx, page.srv, int(v.pack.x), int(v.pack.y), int(v.pack.w), int(v.pack.h), {int(v.bounds.left), int(v.bounds.top)}}
+			v.out^ = {page, int(v.pack.x), int(v.pack.y), int(v.pack.w), int(v.pack.h), {int(v.bounds.left), int(v.bounds.top)}}
 		}
 
 		// "1" means all rects were packed.
 		(all_packed < 1) or_break
 
-		// If the page is full, and we still can't pack, then we're stuck!
+		// If the page is empty, then we're stuck!
 		// We have at least one glyph that will never fit the atlas.
-		if !any_packed && page_empty {
+		if page.pack.num_nodes == 0 {
 			log.warn("failed to pack glyphs")
 			break
 		}
@@ -350,16 +365,21 @@ glyph_pass_cook :: proc(cmd_list: ^d3d12.IGraphicsCommandList, #any_int buffer_i
 	return true
 }
 
+// TODO: This method is super slow! Lots of pointer chasing and descriptor handle checking.
 glyph_draw :: proc() {
+	superluminal.InstrumentationScope("Glyph Draw", color = GLYPH_COLOR)
+
 	for v in glyph_state.draws {
 		for rect in v.rects {
+			page := rect.glyph.page.? or_continue
+
 			gfx_attach_draw(
 				v.attach,
 				rect.pos + {f32(rect.glyph.off.x), f32(rect.glyph.off.y)},
 				{f32(rect.glyph.w), f32(rect.glyph.h)},
 				rect.color,
 				{f32(rect.glyph.x), f32(rect.glyph.w), f32(rect.glyph.y), f32(rect.glyph.h)} / f32(GLYPH_TEX_LENGTH),
-				texi = cast(u32)gfx_descriptor_idx(rect.glyph.page_srv),
+				texi = cast(u32)gfx_descriptor_idx(page.srv),
 				depth = v.depth,
 			)
 		}
@@ -395,11 +415,11 @@ glyph_renderer_vtable: d2w.IDWriteTextRenderer_VTable = {
 		return 0
 	},
 	IsPixelSnappingDisabled = proc "system" (this: ^d2w.IDWritePixelSnapping, clientDrawingContext: rawptr, isDisabled: ^win.BOOL) -> win.HRESULT {
+		// TODO: Are we supporting this?
 		isDisabled^ = win.FALSE
 		return win.S_OK
 	},
 	GetCurrentTransform = proc "system" (this: ^d2w.IDWritePixelSnapping, clientDrawingContext: rawptr, transform: ^d2w.DWRITE_MATRIX) -> win.HRESULT {
-		// TODO: Identity lmao.
 		transform^ = DWRITE_IDENTITY
 		return win.S_OK
 	},
@@ -453,7 +473,7 @@ glyph_renderer_vtable: d2w.IDWriteTextRenderer_VTable = {
 			defer sum_advance += advance
 
 			base, frac := math.modf(baselineOriginX + sum_advance + offset.advanceOffset)
-			shift_x := int(0.5 + frac * GLYPH_X_SLOPS)
+			shift_x := u16(0.5 + frac * GLYPH_X_SLOPS)
 
 			key := Glyph_Key {
 				face    = face3,

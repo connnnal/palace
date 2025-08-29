@@ -131,14 +131,16 @@ gfx_descriptor_idx :: proc(handle: $H/Gfx_Descriptor_Handle($T, $C), sub_index :
 		// Let's say the heap comes after the slot array in memory.
 		// Note it's an implementation detail that offset allocator indices are >0!!
 		idx = int(GFX_DESCRIPTOR_SPECS[T].count_slots) + int(handle.allocation.offset)
-		ok = handle.allocation.index > 0
+
+		// TODO: Ensure we have a method to detect zero-initialised (invalid) handles.
+		ok = true
 
 		// Allow sub-indexing.
 		log.assertf(sub_index < int(C), "cannot index past contiguously allocated heap range (%v < %v)", sub_index, C, loc = loc)
 		idx += sub_index
 	}
 
-	// log.assertf(ok, "bad descriptor handle %v", handle, loc = loc)
+	log.assertf(ok, "null descriptor handle (type %v, count %v)", T, C, loc = loc)
 
 	return idx
 }

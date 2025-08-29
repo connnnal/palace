@@ -291,7 +291,6 @@ im_widget_button_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_B
 	gfx_attach_draw(render.attach, {f32(node.measure.pos.x), f32(node.measure.pos.y)}, {f32(node.measure.size.x), f32(node.measure.size.y)}, node.color)
 }
 
-
 // Text.
 Im_Widget_Text :: struct {
 	text: Text_Layout_State,
