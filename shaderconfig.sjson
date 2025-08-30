@@ -6,7 +6,7 @@ shaders = [
 			{
 				name = "BASE"
 				tweaks = [
-					{ name = "APP", entry = "ENGINE_ROOT_SIG_GRAPHICS", profile = "rootsig_1_1" }
+					{ name = "APP", entry = "ROOT_SIG_GRAPHICS", profile = "rootsig_1_1" }
 				]
 			}
 		]

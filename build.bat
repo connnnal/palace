@@ -62,7 +62,7 @@ IF "%-test%"=="1" (
 )
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
-IF "%shadert%"=="1" (
+IF "%shadertool%"=="1" (
 	odin build shadertool -out:shadertool.exe %all_flags% %app_flags% -keep-executable
 )
 IF %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%

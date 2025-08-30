@@ -59,8 +59,8 @@ InputPs vs_main(InputVs input)
 		0,
 		1
 	);
-	pos.x *= drawConstants.viewport_inv.x;
-	pos.y *= drawConstants.viewport_inv.y;
+	pos.x *= draw_constants.viewport_inv.x;
+	pos.y *= draw_constants.viewport_inv.y;
 	pos.y = 1 - pos.y;
 	pos.x = (pos.x - 0.5f) * 2.0f;
 	pos.y = (pos.y - 0.5f) * 2.0f;
@@ -264,9 +264,9 @@ float4 ps_main(InputPs input) : SV_Target
 #endif
 
 #ifdef SPEC_GLASS
-	float2 input_pos_frac = input.pos.xy * drawConstants.viewport_inv;
+	float2 input_pos_frac = input.pos.xy * draw_constants.viewport_inv;
 
-	Texture2D texture_prev = ResourceDescriptorHeap[drawConstants.accum_idx];
+	Texture2D texture_prev = ResourceDescriptorHeap[draw_constants.accum_idx];
 	float3 accum = 0;
 	uint mip_start = 3;
 	uint mip_end = 7;

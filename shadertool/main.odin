@@ -330,7 +330,9 @@ main_ :: proc() -> Error {
 			state: xxhash.XXH64_state
 			xxhash.XXH64_reset_state(&state, seed = 0)
 			xxhash.XXH64_update(&state, transmute([]byte)shader.name)
-			xxhash.XXH64_update(&state, transmute([]byte)shader.source.?)
+			maybe_hash_into(&state, shader_entry)
+			maybe_hash_into(&state, shader_source)
+			maybe_hash_into(&state, shader_profile)
 			for tweak, i in combo {
 				owning_lane := shader.lanes[i]
 				xxhash.XXH64_update(&state, transmute([]byte)owning_lane.name)
