@@ -6,7 +6,6 @@ import "core:fmt"
 import "core:log"
 import "core:math/bits"
 import "core:math/linalg"
-import "core:reflect"
 
 import win "core:sys/windows"
 import "vendor:directx/d3d12"
@@ -278,12 +277,12 @@ gfx_wait_on_gpu :: proc() {
 @(private, rodata)
 shader_common_input: []d3d12.INPUT_ELEMENT_DESC = {
 	{"RECT",  0, .R32G32B32A32_FLOAT, 0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
-	{"COLOR", 0, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
-	{"COLOR", 1, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
-	{"COLOR", 2, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
-	{"COLOR", 3, .R8G8B8A8_UNORM,     1, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
-	{"TEXC",  0, .R32G32B32A32_FLOAT, 2, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
-	{"PACK",  0, .R32G32B32A32_UINT,  3, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 0, .R8G8B8A8_UNORM,     0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 1, .R8G8B8A8_UNORM,     0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 2, .R8G8B8A8_UNORM,     0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"COLOR", 3, .R8G8B8A8_UNORM,     0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"TEXC",  0, .R32G32B32A32_FLOAT, 0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
+	{"PACK",  0, .R32G32B32A32_UINT,  0, d3d12.APPEND_ALIGNED_ELEMENT, .PER_INSTANCE_DATA, 1},
 }
 // odinfmt: enable
 
@@ -293,13 +292,11 @@ SWAPCHAIN_FORMAT :: dxgi.FORMAT.R8G8B8A8_UNORM
 DEPTH_STENCIL_FORMAT :: dxgi.FORMAT.D32_FLOAT_S8X24_UINT
 DEPTH_STENCIL_CLEAR :: d3d12.DEPTH_STENCIL_VALUE{0, 1}
 COLOR_CLEAR :: [4]f32{100.0 / 255, 118.0 / 255, 140.0 / 255, 1.0}
-MAX_DRAW_CMDS :: 2048
 
-// Inputs per instance, assuming N verts each.
-VERTS_PER_INSTANCE :: 4
-Shader_Input_Layout :: #soa[MAX_DRAW_CMDS]struct {
+MAX_DRAW_CMDS :: 2048
+Shader_Input :: struct {
 	rect:       [4]f32,
-	color:      [VERTS_PER_INSTANCE][4]u8,
+	color:      [4][4]u8,
 	texc:       [4]f32,
 	using pack: struct {
 		texi:     u32,
@@ -318,6 +315,7 @@ Shader_Input_Layout :: #soa[MAX_DRAW_CMDS]struct {
 		softness: f32,
 	},
 }
+Shader_Input_Layout :: [MAX_DRAW_CMDS]Shader_Input
 
 Gfx_Pass_Cmd :: struct {
 	buf:        ^d3d12.IResource,
@@ -730,16 +728,13 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 
 			index := gfx_pass_meta[pass_type].back_to_front ? 0 : MAX_DRAW_CMDS - pass.count
 
-			vertex_fields := reflect.struct_fields_zipped(Shader_Input_Layout)
-			vertex_root := pass.buf->GetGPUVirtualAddress() + u64(bb_idx) * size_of(Shader_Input_Layout)
-			views := make([]d3d12.VERTEX_BUFFER_VIEW, len(vertex_fields), context.temp_allocator)
-			for f, i in vertex_fields {
-				inner := f.type.variant.(runtime.Type_Info_Array) or_else log.panicf("invalid shader field %#v", f)
-				views[i] = {vertex_root + u64(f.offset), u32(inner.elem_size * inner.count), u32(inner.elem.size)}
-			}
+			view: d3d12.VERTEX_BUFFER_VIEW
+			view.StrideInBytes = size_of(Shader_Input_Layout) / len(Shader_Input_Layout)
+			view.BufferLocation = pass.buf->GetGPUVirtualAddress() + u64(bb_idx) * size_of(Shader_Input_Layout)
+			view.SizeInBytes = size_of(Shader_Input_Layout)
 
 			a.cmd_list->IASetPrimitiveTopology(.TRIANGLESTRIP)
-			a.cmd_list->IASetVertexBuffers(0, cast(u32)len(views), raw_data(views))
+			a.cmd_list->IASetVertexBuffers(0, 1, &view)
 
 			a.cmd_list->SetPipelineState(gfx_state.pipelines[pass_type])
 			a.cmd_list->DrawInstanced(4, count, 0, u32(index))
@@ -866,9 +861,8 @@ gfx_attach_draw :: proc(
 	hardness: f32 = 1,
 	border: u32 = 0,
 	rounding_corners: [4]bool = true,
-	depth: Maybe(u32) = nil,
 	test: bool = false,
-) {
+) -> ^Shader_Input {
 	bucket_type: Gfx_Bucket
 	pass_type: Gfx_Pass
 	switch true {
@@ -893,13 +887,10 @@ gfx_attach_draw :: proc(
 	pass := &bucket.passes[pass_type]
 	pass_meta := gfx_pass_meta[pass_type]
 
-	index: int
-	{
-		defer pass.count += 1
-		index = pass_meta.back_to_front ? pass.count : (MAX_DRAW_CMDS - 1 - pass.count)
-	}
+	index := pass_meta.back_to_front ? pass.count : (MAX_DRAW_CMDS - 1 - pass.count)
+	defer pass.count += 1
 
-	depth := depth.? or_else u32(bucket.total)
+	depth := u32(bucket.total)
 	defer bucket.total += 1
 
 	color := linalg.array_cast(color * 255, u8)
@@ -920,6 +911,8 @@ gfx_attach_draw :: proc(
 	pass.buf_mapped[buf][index].inner.round_br = rounding_corners[3]
 	pass.buf_mapped[buf][index].inner.depth = depth
 	pass.buf_mapped[buf][index].inner.border = border
+
+	return &pass.buf_mapped[buf][index]
 }
 
 // https://vulkan-tutorial.com/Generating_Mipmaps#page_Image-creation.

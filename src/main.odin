@@ -123,9 +123,9 @@ main :: proc() {
 		}
 
 		// gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {1, 0, 1, 1}, rounding = 32, rounding_corners = true, test = true)
-		// gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, p[.Void], hardness = 1, rounding = 128, rounding_corners = true, test = true)
-		// gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {1, 0, 0, 1}, rounding = 32, rounding_corners = true)
-		// gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {1, 1, 0, 1}, rounding = 32, border = 8, rounding_corners = true)
+		gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, {1, 0, 0, 1}, rounding = 32, hardness = 0.1, rounding_corners = true)
+		gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, {1, 1, 0, 1}, rounding = 32, border = 8, rounding_corners = true)
+		gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, p[.Void], hardness = 1, rounding = 32, rounding_corners = true, test = true)
 	}
 
 	wind_open(&w)

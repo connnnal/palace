@@ -105,8 +105,6 @@ gfx_descriptor_free :: proc(handle: $H/Gfx_Descriptor_Handle($T, $C)) {
 
 gfx_descriptor_cpu :: proc(handle: $H/Gfx_Descriptor_Handle($T, $C), sub_index := 0, loc := #caller_location) -> d3d12.CPU_DESCRIPTOR_HANDLE {
 	idx := gfx_descriptor_idx(handle, sub_index, loc)
-	ok := true
-
 	out := gfx_descriptor.heaps[T].start_cpu
 	out.ptr += uint(idx) * uint(gfx_descriptor.heaps[T].inc)
 	return out
@@ -114,8 +112,6 @@ gfx_descriptor_cpu :: proc(handle: $H/Gfx_Descriptor_Handle($T, $C), sub_index :
 
 gfx_descriptor_gpu :: proc(handle: $H/Gfx_Descriptor_Handle($T, $C), sub_index := 0, loc := #caller_location) -> d3d12.GPU_DESCRIPTOR_HANDLE {
 	idx := gfx_descriptor_idx(handle, sub_index, loc)
-	ok := true
-
 	out := gfx_descriptor.heaps[T].start_gpu
 	out.ptr += u64(idx) * u64(gfx_descriptor.heaps[T].inc)
 	return out
