@@ -248,9 +248,7 @@ gfx_pipeline_runner :: proc() {
 		// That's fine.
 		(pack.state == nil) or_continue
 
-		defer log.debugf("cooked pipeline: caps %#v", caps)
-
-		is_opaque := caps == GFX_RECT_CAPS_OPAQUE
+		is_opaque := .Translucent not_in caps
 		vs, ps := gfx_rect_caps_specs(caps)
 
 		target_blend_state: d3d12.RENDER_TARGET_BLEND_DESC = {
@@ -313,6 +311,8 @@ gfx_pipeline_runner :: proc() {
 
 		sync.atomic_store_explicit(&pack.phase, sync.Futex(Gfx_Pipeline_Phase.Ready), .Release)
 		sync.futex_signal(&pack.phase)
+
+		log.debugf("cooked pipeline: caps %#v", caps)
 	}
 	for pack in gfx_state.pipelines {
 		if pack.state != nil {
@@ -359,6 +359,7 @@ DEPTH_STENCIL_CLEAR :: d3d12.DEPTH_STENCIL_VALUE{0, 1}
 COLOR_CLEAR :: [4]f32{100.0 / 255, 118.0 / 255, 140.0 / 255, 1.0}
 
 MAX_DRAW_CMDS :: 2048
+MAX_DRAW_SPLITS :: 256
 Shader_Input :: struct {
 	rect:       [4]f32,
 	color:      [4][4]u8,
@@ -405,10 +406,13 @@ Gfx_Attach :: struct {
 	count_started:      u64, // How many frames have we started rendering?
 	count_done:         ^d3d12.IFence, // How many frames have we finished rendering?
 	// Cmds pt3.
-	tracks:             [Gfx_Rect_Track]Gfx_Track,
+	track:              Gfx_Track,
 	draw_buffer:        [MAX_DRAW_CMDS]Shader_Input,
 	draw_count:         int,
-	draw_splits:        [MAX_DRAW_CMDS]int,
+	draw_splits:        [MAX_DRAW_SPLITS]bit_field int {
+		end:           int  | 63,
+		prepare_glass: bool | 1,
+	},
 	draw_splits_count:  int,
 	// TODO: Simplify this.
 	offscreen:          [Gfx_Pass_Offscreen]struct {
@@ -637,7 +641,7 @@ gfx_attach :: proc(wnd: win.HWND, allocator := context.allocator) -> ^Gfx_Attach
 			check(hr, "failed to create command allocator")
 		}
 	}
-	for &track in attach.tracks {
+	{
 		hr =
 		gfx_state.device->CreateCommittedResource(
 			&{Type = .UPLOAD},
@@ -654,11 +658,11 @@ gfx_attach :: proc(wnd: win.HWND, allocator := context.allocator) -> ^Gfx_Attach
 			d3d12.RESOURCE_STATE_COMMON,
 			nil,
 			d3d12.IResource_UUID,
-			(^rawptr)(&track.buf),
+			(^rawptr)(&attach.track.buf),
 		)
 		check(hr, "failed to create input buffer")
 
-		hr = track.buf->Map(0, &d3d12.RANGE{0, 0}, (^rawptr)(&track.buf_mapped))
+		hr = attach.track.buf->Map(0, &d3d12.RANGE{0, 0}, (^rawptr)(&attach.track.buf_mapped))
 		check(hr, "failed to map input buffer")
 	}
 
@@ -677,9 +681,7 @@ gfx_detach :: proc(a: ^Gfx_Attach, allocator := context.allocator) {
 		gfx_descriptor_free(pack.srv)
 	}
 
-	for track in a.tracks {
-		track.buf->Release()
-	}
+	a.track.buf->Release()
 
 	gfx_ffx_blur_destroy(&a.ffx_blur)
 	gfx_ffx_spd_destroy(&a.ffx_spd)
@@ -735,22 +737,17 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 	color_view := gfx_descriptor_cpu(a.offscreen[.Render].rtv)
 	depth_stencil_view := gfx_descriptor_cpu(a.depth_stencil_view)
 
+	color_clear := COLOR_CLEAR
 	a.cmd_list->OMSetRenderTargets(1, &color_view, win.TRUE, &depth_stencil_view)
-	a.cmd_list->ClearRenderTargetView(color_view, &[?]f32{100.0 / 255, 118.0 / 255, 140.0 / 255, 1.0}, 0, nil)
+	a.cmd_list->ClearRenderTargetView(color_view, &color_clear, 0, nil)
 
 	gfx_ffx_blur_frame(&a.ffx_blur, bb_idx)
 	gfx_ffx_spd_frame(&a.ffx_spd, bb_idx)
 
-	gfx_rect_split(a)
-
 	// Coalesce draws.
+	gfx_rect_split(a, prepare_glass = false)
 	defer a.draw_count = 0
 	defer a.draw_splits_count = 0
-	{
-		// Ensure these are ready before we do anything.
-		gfx_pipeline_wait(GFX_RECT_CAPS_OPAQUE)
-		gfx_pipeline_wait(GFX_RECT_CAPS_UBER)
-	}
 	{
 		a.cmd_list->SetGraphicsRootSignature(gfx_state.root_sig)
 
@@ -766,80 +763,86 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 
 		a.cmd_list->SetGraphicsRoot32BitConstants(0, size_of(constants) / size_of(u32), &constants, 0)
 	}
-	track_views: [Gfx_Rect_Track]d3d12.VERTEX_BUFFER_VIEW
-	for &view, type in track_views {
-		view.StrideInBytes = size_of(Shader_Input_Layout) / len(Shader_Input_Layout)
-		view.BufferLocation = a.tracks[type].buf->GetGPUVirtualAddress() + u64(bb_idx) * size_of(Shader_Input_Layout)
-		view.SizeInBytes = size_of(Shader_Input_Layout)
+	{
+		a.cmd_list->IASetPrimitiveTopology(.TRIANGLESTRIP)
+		view: d3d12.VERTEX_BUFFER_VIEW = {
+			StrideInBytes  = size_of(Shader_Input_Layout) / len(Shader_Input_Layout),
+			BufferLocation = a.track.buf->GetGPUVirtualAddress() + u64(bb_idx) * size_of(Shader_Input_Layout),
+			SizeInBytes    = size_of(Shader_Input_Layout),
+		}
+		a.cmd_list->IASetVertexBuffers(0, 1, &view)
 	}
+	{
+		// Ensure these are ready before we do anything.
+		gfx_pipeline_wait(GFX_RECT_CAPS_OPAQUE)
+		gfx_pipeline_wait(GFX_RECT_CAPS_UBER)
+	}
+
+	// Opaque rendering is back-to-front, to take advantage of the depth buffer.
+	// A neat side effect is that we can use just one buffer!
+	// In-order special rects move from the left, reversed batched rects from the right.
+	Gfx_Rect_Stream :: enum {
+		Opaque,
+		Special,
+	}
+	stream_starts: [Gfx_Rect_Stream]int
+
 	i := 0
-	track_starts: [Gfx_Rect_Track]int
-	for limit, split_idx in a.draw_splits[:a.draw_splits_count] {
+	for split in a.draw_splits[:a.draw_splits_count] {
 		a.cmd_list->ClearDepthStencilView(depth_stencil_view, {.DEPTH}, DEPTH_STENCIL_CLEAR.Depth, DEPTH_STENCIL_CLEAR.Stencil, 0, nil)
 
-		track_ends := track_starts
-		defer track_starts = track_ends
+		stream_ends := stream_starts
+		defer stream_starts = stream_ends
 
-		Gfx_Special_Split :: struct {
+		Gfx_Special_Batch :: struct {
 			caps: Gfx_Rect_Caps,
 			end:  int,
 		}
-		special_splits: [dynamic]Gfx_Special_Split
+		special_splits: [dynamic]Gfx_Special_Batch
 		special_splits.allocator = context.temp_allocator
-		special_split_curr: Gfx_Special_Split
+		special_split_curr: Gfx_Special_Batch
 
-		for i < limit {
+		for i < split.end {
 			defer i += 1
 
 			#no_bounds_check draw_cmd := a.draw_buffer[i]
 			draw_cmd.inner.depth = u32(i)
 
 			caps := gfx_rect_caps_from_cmd(draw_cmd)
-			track: Gfx_Rect_Track = (caps == GFX_RECT_CAPS_OPAQUE) ? .Opaque : .Special
+			track: Gfx_Rect_Stream = (caps == GFX_RECT_CAPS_OPAQUE) ? .Opaque : .Special
 
-			// Opaque rendering is back-to-front, to take advantage of the depth buffer.
-			index := (track == .Special) ? track_ends[track] : (MAX_DRAW_CMDS - 1 - track_ends[track])
-			a.tracks[track].buf_mapped[bb_idx][index] = draw_cmd
-			track_ends[track] += 1
+			index := (track == .Special) ? stream_ends[track] : (MAX_DRAW_CMDS - 1 - stream_ends[track])
+			a.track.buf_mapped[bb_idx][index] = draw_cmd
+			stream_ends[track] += 1
 
-			switch track {
-			case .Special:
+			if track == .Special {
 				if special_split_curr.caps != {} && special_split_curr.caps != caps {
 					append(&special_splits, special_split_curr)
 				}
-				special_split_curr = {caps, track_ends[track]}
-			case .Opaque:
+				special_split_curr = {caps, stream_ends[track]}
 			}
 		}
 
-		if special_split_curr.end > 0 {
-			append(&special_splits, special_split_curr)
-		}
+		append(&special_splits, special_split_curr)
 
-		// Render everything opaque first.
+		// Render opaque rects first.
 		draw_opaque: {
-			count := track_ends[.Opaque] - track_starts[.Opaque]
+			count := stream_ends[.Opaque] - stream_starts[.Opaque]
 			(count > 0) or_break draw_opaque
-
-			a.cmd_list->IASetPrimitiveTopology(.TRIANGLESTRIP)
-			a.cmd_list->IASetVertexBuffers(0, 1, &track_views[.Opaque])
 
 			pipeline := gfx_pipeline_expect(GFX_RECT_CAPS_OPAQUE)
 
 			a.cmd_list->SetPipelineState(pipeline)
-			a.cmd_list->DrawInstanced(4, u32(count), 0, u32(MAX_DRAW_CMDS - 1 - track_ends[.Opaque]))
+			a.cmd_list->DrawInstanced(4, u32(count), 0, MAX_DRAW_CMDS - u32(stream_ends[.Opaque]))
 		}
 
-		// Render special things front-to-back.
-		last_split_end := track_starts[.Special]
+		// Render special rects front-to-back.
+		last_split_end := stream_starts[.Special]
 		draw_special: for split in special_splits {
 			defer last_split_end = split.end
 
 			count := split.end - last_split_end
 			(count > 0) or_break draw_special
-
-			a.cmd_list->IASetPrimitiveTopology(.TRIANGLESTRIP)
-			a.cmd_list->IASetVertexBuffers(0, 1, &track_views[.Special])
 
 			pipeline := gfx_pipeline_query(split.caps) or_else gfx_pipeline_expect(GFX_RECT_CAPS_UBER)
 
@@ -848,8 +851,7 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 		}
 
 		// Prepare blurred textures for sampling in the glass shader.
-		// Skip if this is the last known split.
-		(split_idx < a.draw_splits_count - 1) or_continue
+		(split.prepare_glass) or_continue
 		// Downsample colour output buffer.
 		{
 			barriers := [?]d3d12.RESOURCE_BARRIER {
@@ -962,18 +964,13 @@ gfx_mips_for_resolution :: #force_inline proc "contextless" (size: [2]$T) -> int
 	return cast(int)bits.log2(linalg.max(size)) + 1
 }
 
-// Underlying command stream (vertex buffer).
-Gfx_Rect_Track :: enum {
-	Opaque,
-	Special,
-}
-
 // Required pipline capabilities to draw this rectangle.
 Gfx_Rect_Cap :: enum {
 	Texture,
 	Rounded,
 	Border,
 	Glass,
+	Translucent,
 }
 Gfx_Rect_Caps :: bit_set[Gfx_Rect_Cap;u8]
 GFX_RECT_CAPS_OPAQUE :: Gfx_Rect_Caps{}
@@ -1002,23 +999,30 @@ gfx_rect_caps_specs :: proc(caps: Gfx_Rect_Caps) -> (vs: shaders.Rect_Vs_Spec, p
 
 gfx_rect_caps_from_cmd :: proc(input: Shader_Input) -> (caps: Gfx_Rect_Caps) {
 	if input.texi != max(u32) {
-		caps += {.Texture}
+		// We assume the worst case: that all textured rects are translucent. They may not be!
+		caps += {.Texture, .Translucent}
 	}
 	if input.corner > 0 {
-		caps += {.Rounded}
+		caps += {.Rounded, .Translucent}
 	}
 	if input.inner.border > 0 {
-		caps += {.Border}
+		caps += {.Border, .Translucent}
 	}
 	if input.inner.glass {
 		caps += {.Glass}
 	}
+	if input.color[0][3] < 255 || input.color[1][3] < 255 || input.color[2][3] < 255 || input.color[3][3] < 255 {
+		caps += {.Translucent}
+	}
 	return
 }
 
-gfx_rect_split :: proc(attach: ^Gfx_Attach) {
+gfx_rect_split :: proc(attach: ^Gfx_Attach, prepare_glass := true) {
 	defer attach.draw_splits_count += 1
-	attach.draw_splits[attach.draw_splits_count] = attach.draw_count
+	attach.draw_splits[attach.draw_splits_count] = {
+		end           = attach.draw_count,
+		prepare_glass = prepare_glass,
+	}
 }
 
 gfx_rect_reserve :: proc(attach: ^Gfx_Attach, count: int) -> []Shader_Input {
