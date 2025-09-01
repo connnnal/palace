@@ -46,14 +46,15 @@ Glyph_Key :: struct {
 }
 
 Glyph_Run_Draw :: struct {
-	glyph:   ^Glyph_Cached,
-	command: ^Shader_Input,
-	pos:     [2]f32,
+	glyph: ^Glyph_Cached,
+	pos:   [2]f32,
 }
 
 Glyph_Run_Pending :: struct {
-	attach: ^Gfx_Attach,
-	rects:  []Glyph_Run_Draw,
+	attach:   ^Gfx_Attach,
+	rects:    []Glyph_Run_Draw,
+	commands: []Shader_Input,
+	color:    [4]f32,
 }
 
 Glyph_Cached :: struct {
@@ -364,20 +365,29 @@ glyph_pass_cook :: proc(cmd_list: ^d3d12.IGraphicsCommandList, #any_int buffer_i
 }
 
 // TODO: This method is super slow! Lots of pointer chasing and descriptor handle checking.
-// TODO: Assuming the internals of the rect drawing function here sucks!
 glyph_draw :: proc() {
 	superluminal.InstrumentationScope("Glyph Draw", color = GLYPH_COLOR)
 
 	for v in glyph_state.draws {
-		for rect in v.rects {
-			page := rect.glyph.page.? or_continue
+		for rect, i in v.rects {
+			command := &v.commands[i]
 
-			off := rect.pos + {f32(rect.glyph.off.x), f32(rect.glyph.off.y)}
-			dim := [2]f32{f32(rect.glyph.w), f32(rect.glyph.h)}
-
-			rect.command.rect = {off.x, dim.x, off.y, dim.y}
-			rect.command.texi = cast(u32)gfx_descriptor_idx(page.srv)
-			rect.command.texc = {f32(rect.glyph.x), f32(rect.glyph.w), f32(rect.glyph.y), f32(rect.glyph.h)} / f32(GLYPH_TEX_LENGTH)
+			// Note that some glyphs may not have an assigned page!
+			// In that case, we need to zero out the draw command so we don't render junk.
+			// It remains to be seen whether we want to expose that kind of responsibiltiy onto the user.
+			// Zero'ing a GPU-visible buffer for no reason is just a waste, right?
+			if page, ok := rect.glyph.page.?; ok {
+				gfx_rect_props(
+					command,
+					rect.pos + {f32(rect.glyph.off.x), f32(rect.glyph.off.y)},
+					{f32(rect.glyph.w), f32(rect.glyph.h)},
+					v.color,
+					{f32(rect.glyph.x), f32(rect.glyph.w), f32(rect.glyph.y), f32(rect.glyph.h)} / f32(GLYPH_TEX_LENGTH),
+					cast(u32)gfx_descriptor_idx(page.srv),
+				)
+			} else {
+				gfx_rect_null(command)
+			}
 		}
 	}
 }
@@ -456,8 +466,10 @@ glyph_renderer_vtable: d2w.IDWriteTextRenderer_VTable = {
 		)
 
 		pending := Glyph_Run_Pending {
-			attach = attach,
-			rects  = make([]Glyph_Run_Draw, glyph_count, context.temp_allocator),
+			attach   = attach,
+			rects    = make([]Glyph_Run_Draw, glyph_count, context.temp_allocator),
+			commands = gfx_rect_reserve(attach, glyph_count),
+			color    = color,
 		}
 		defer append(&glyph_state.draws, pending)
 
@@ -477,7 +489,7 @@ glyph_renderer_vtable: d2w.IDWriteTextRenderer_VTable = {
 			}
 
 			_, value_ptr, just_inserted := map_entry(&glyph_state.discovery, key) or_else log.panicf("out of map memory on %q", key)
-			defer pending.rects[i] = {value_ptr^, gfx_attach_draw(attach, 0, 0, color, {1, 0, 0, 1}, texi = 0), {base, baselineOriginY + offset.ascenderOffset}}
+			defer pending.rects[i] = {value_ptr^, {base, baselineOriginY + offset.ascenderOffset}}
 
 			if just_inserted {
 				face3->AddRef()

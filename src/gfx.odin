@@ -6,6 +6,9 @@ import "core:fmt"
 import "core:log"
 import "core:math/bits"
 import "core:math/linalg"
+import "core:sync"
+import "core:sync/chan"
+import "core:thread"
 
 import win "core:sys/windows"
 import "vendor:directx/d3d12"
@@ -29,46 +32,35 @@ GFX_COLOR := superluminal.MAKE_COLOR(255, 0, 255)
 
 GFX_DEBUG :: #config(USE_GFX_DEBUG, false)
 
-Gfx_Pass :: enum {
-	Opaque,
-	Opaque_Texture,
-	Expensive,
-	Glass,
-}
-Gfx_Pass_Meta :: struct {
-	vs:            shaders.Rect_Vs_Spec,
-	ps:            shaders.Rect_Ps_Spec,
-	back_to_front: bool,
-}
-@(private, rodata)
-gfx_pass_meta: [Gfx_Pass]Gfx_Pass_Meta = {
-	.Opaque = {vs = {}, ps = {}, back_to_front = false},
-	.Opaque_Texture = {vs = {}, ps = {}, back_to_front = false},
-	.Expensive = {vs = {texture = .Yes, rounded = .Yes, border = .Yes}, ps = {texture = .Yes, rounded = .Yes, border = .Yes}, back_to_front = true},
-	.Glass = {vs = {rounded = .Yes, border = .Yes}, ps = {glass = .Yes, rounded = .Yes, border = .Yes}, back_to_front = true},
-}
-
 Gfx_Pass_Offscreen :: enum {
 	Render,
 	Downsample,
 	Working,
-	Output,
 }
 
-Gfx_Bucket :: enum {
-	Back,
-	Fore,
+Gfx_Pipeline_Phase :: enum {
+	Unwanted,
+	Signalled,
+	Ready,
 }
 
 gfx_state: struct {
-	adapter:      ^dxgi.IAdapter,
-	device:       ^d3d12.IDevice4,
-	queue:        ^d3d12.ICommandQueue,
-	dxgi_factory: ^dxgi.IFactory6,
-	root_sig:     ^d3d12.IRootSignature,
-	pipelines:    [Gfx_Pass]^d3d12.IPipelineState,
-	halt_fence:   ^d3d12.IFence,
-	halt_value:   u64,
+	adapter:         ^dxgi.IAdapter,
+	device:          ^d3d12.IDevice4,
+	queue:           ^d3d12.ICommandQueue,
+	dxgi_factory:    ^dxgi.IFactory6,
+	root_sig:        ^d3d12.IRootSignature,
+	// Device sync.
+	halt_fence:      ^d3d12.IFence,
+	halt_value:      u64,
+	// Pipeline manager.
+	pipelines:       [GFX_RECT_CAP_PERMS]struct #min_field_align(64) {
+		state: ^d3d12.IPipelineState,
+		phase: sync.Futex,
+	},
+	pipeline_chan:   chan.Chan(Gfx_Rect_Caps),
+	// TODO: Upstream that a zero-initialised thread is considered done.
+	pipeline_thread: ^thread.Thread,
 }
 
 @(init)
@@ -168,10 +160,98 @@ gfx_init :: proc "contextless" () {
 	hr = gfx_state.device->CreateRootSignature(0, expand_values(sig_bin), d3d12.IRootSignature_UUID, (^rawptr)(&gfx_state.root_sig))
 	check(hr, "failed to create root signature")
 
-	for &pipeline, type in gfx_state.pipelines {
-		meta := gfx_pass_meta[type]
+	gfx_state.pipeline_chan = chan.create_buffered(type_of(gfx_state.pipeline_chan), 1024, context.allocator) or_else log.panic("failed to create pipeline queue")
+	gfx_state.pipeline_thread = thread.create_and_start(gfx_pipeline_runner, context)
 
-		is_opaque := !meta.back_to_front
+	gfx_pipeline_query(GFX_RECT_CAPS_OPAQUE)
+	gfx_pipeline_query(GFX_RECT_CAPS_UBER)
+
+	gfx_descriptor_init()
+	gfx_ffx_init()
+}
+
+@(fini)
+gfx_fini :: proc "contextless" () {
+	superluminal.InstrumentationScope("Gfx Fini", color = GFX_COLOR)
+
+	context = default_context()
+
+	chan.close(gfx_state.pipeline_chan)
+	thread.destroy(gfx_state.pipeline_thread)
+
+	gfx_descriptor_fini()
+
+	gfx_state.adapter->Release()
+	gfx_state.device->Release()
+	gfx_state.queue->Release()
+	gfx_state.dxgi_factory->Release()
+	gfx_state.root_sig->Release()
+	gfx_state.halt_fence->Release()
+
+	gfx_ffx_fini()
+}
+
+@(private)
+gfx_pipeline_query :: proc(caps: Gfx_Rect_Caps) -> (^d3d12.IPipelineState, bool) {
+	pack := &gfx_state.pipelines[transmute(u8)caps]
+
+	value := sync.atomic_load_explicit(&pack.phase, .Relaxed)
+	switch Gfx_Pipeline_Phase(value) {
+	case .Unwanted:
+		_, swapped := sync.atomic_compare_exchange_strong(&pack.phase, sync.Futex(Gfx_Pipeline_Phase.Unwanted), sync.Futex(Gfx_Pipeline_Phase.Signalled))
+		if swapped {
+			chan.send(gfx_state.pipeline_chan, caps)
+		}
+		return nil, false
+	case .Signalled:
+		return nil, false
+	case .Ready:
+		return pack.state, true
+	}
+	unreachable()
+}
+
+@(private)
+gfx_pipeline_expect :: proc(caps: Gfx_Rect_Caps) -> ^d3d12.IPipelineState {
+	pack := &gfx_state.pipelines[transmute(u8)caps]
+	log.assertf(pack.state != nil, "expected pipeline (caps: #%v)", caps)
+	return pack.state
+}
+
+@(private)
+gfx_pipeline_wait :: proc(caps: Gfx_Rect_Caps) {
+	pack := &gfx_state.pipelines[transmute(u8)caps]
+
+	for {
+		value := sync.atomic_load_explicit(&pack.phase, .Relaxed)
+
+		switch Gfx_Pipeline_Phase(value) {
+		case .Unwanted:
+			log.panicf("can't wait on unsignalled pipeline (caps: %#v)", caps)
+		case .Signalled:
+			continue
+		case .Ready:
+			return
+		}
+
+		sync.futex_wait(&pack.phase, u32(value))
+	}
+}
+
+@(private)
+gfx_pipeline_runner :: proc() {
+	defer runtime.default_temp_allocator_destroy(&runtime.global_default_temp_allocator_data)
+	for caps in chan.recv(gfx_state.pipeline_chan) {
+		pack := &gfx_state.pipelines[transmute(u8)caps]
+
+		// It's possible a client asks for a pipeline that's already been created.
+		// That's fine.
+		(pack.state == nil) or_continue
+
+		defer log.debugf("cooked pipeline: caps %#v", caps)
+
+		is_opaque := caps == GFX_RECT_CAPS_OPAQUE
+		vs, ps := gfx_rect_caps_specs(caps)
 
 		target_blend_state: d3d12.RENDER_TARGET_BLEND_DESC = {
 			BlendEnable           = !is_opaque,
@@ -192,8 +272,8 @@ gfx_init :: proc "contextless" () {
 		}
 		desc: d3d12.GRAPHICS_PIPELINE_STATE_DESC = {
 			pRootSignature = gfx_state.root_sig,
-			VS = shaders.rect_vs(meta.vs),
-			PS = shaders.rect_ps(meta.ps),
+			VS = shaders.rect_vs(vs),
+			PS = shaders.rect_ps(ps),
 			BlendState = blend_state,
 			SampleMask = 0xFFFFFFFF,
 			RasterizerState = {
@@ -227,33 +307,18 @@ gfx_init :: proc "contextless" () {
 			SampleDesc = {1, 0},
 		}
 
-		hr = gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pipeline))
-		checkf(hr, "failed to create graphics pipeline (meta: %#v)", meta)
+		hr: win.HRESULT
+		hr = gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pack.state))
+		checkf(hr, "failed to create graphics pipeline (caps: %#v)", caps)
+
+		sync.atomic_store_explicit(&pack.phase, sync.Futex(Gfx_Pipeline_Phase.Ready), .Release)
+		sync.futex_signal(&pack.phase)
 	}
-
-	gfx_descriptor_init()
-
-	gfx_ffx_init()
-}
-
-@(fini)
-gfx_fini :: proc "contextless" () {
-	superluminal.InstrumentationScope("Gfx Fini", color = GFX_COLOR)
-
-	gfx_descriptor_fini()
-
-	for pipeline in gfx_state.pipelines {
-		pipeline->Release()
+	for pack in gfx_state.pipelines {
+		if pack.state != nil {
+			pack.state->Release()
+		}
 	}
-
-	gfx_state.adapter->Release()
-	gfx_state.device->Release()
-	gfx_state.queue->Release()
-	gfx_state.dxgi_factory->Release()
-	gfx_state.root_sig->Release()
-	gfx_state.halt_fence->Release()
-
-	gfx_ffx_fini()
 }
 
 // This isn't thread safe.
@@ -310,6 +375,7 @@ Shader_Input :: struct {
 			round_tr: bool | 1,
 			round_bl: bool | 1,
 			round_br: bool | 1,
+			glass:    bool | 1,
 		},
 		corner:   f32,
 		softness: f32,
@@ -317,15 +383,9 @@ Shader_Input :: struct {
 }
 Shader_Input_Layout :: [MAX_DRAW_CMDS]Shader_Input
 
-Gfx_Pass_Cmd :: struct {
+Gfx_Track :: struct {
 	buf:        ^d3d12.IResource,
 	buf_mapped: ^[BUFFER_COUNT]Shader_Input_Layout,
-	count:      int,
-}
-
-Gfx_Bucket_Cmd :: struct {
-	total:  int,
-	passes: [Gfx_Pass]Gfx_Pass_Cmd,
 }
 
 Gfx_Attach :: struct {
@@ -345,7 +405,11 @@ Gfx_Attach :: struct {
 	count_started:      u64, // How many frames have we started rendering?
 	count_done:         ^d3d12.IFence, // How many frames have we finished rendering?
 	// Cmds pt3.
-	buckets:            [Gfx_Bucket]Gfx_Bucket_Cmd,
+	tracks:             [Gfx_Rect_Track]Gfx_Track,
+	draw_buffer:        [MAX_DRAW_CMDS]Shader_Input,
+	draw_count:         int,
+	draw_splits:        [MAX_DRAW_CMDS]int,
+	draw_splits_count:  int,
 	// TODO: Simplify this.
 	offscreen:          [Gfx_Pass_Offscreen]struct {
 		texture: ^d3d12.IResource,
@@ -534,27 +598,6 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 				d3d12.IResource_UUID,
 				(^rawptr)(&pack.texture),
 			)
-		case .Output:
-			hr =
-			gfx_state.device->CreateCommittedResource(
-				&{Type = .DEFAULT},
-				{},
-				&{
-					Dimension = .TEXTURE2D,
-					Width = u64(res.x),
-					Height = res.y,
-					DepthOrArraySize = 1,
-					MipLevels = 1,
-					Format = SWAPCHAIN_FORMAT,
-					SampleDesc = {1, 0},
-					Layout = .UNKNOWN,
-					Flags = {.ALLOW_UNORDERED_ACCESS},
-				},
-				{.NON_PIXEL_SHADER_RESOURCE},
-				nil,
-				d3d12.IResource_UUID,
-				(^rawptr)(&pack.texture),
-			)
 		}
 		check(hr, "failed to create temp texture")
 
@@ -594,31 +637,29 @@ gfx_attach :: proc(wnd: win.HWND, allocator := context.allocator) -> ^Gfx_Attach
 			check(hr, "failed to create command allocator")
 		}
 	}
-	for &bucket in attach.buckets {
-		for &pass in bucket.passes {
-			hr =
-			gfx_state.device->CreateCommittedResource(
-				&{Type = .UPLOAD},
-				{.CREATE_NOT_ZEROED},
-				&{
-					Dimension = .BUFFER,
-					Width = BUFFER_COUNT * size_of(Shader_Input_Layout),
-					Height = 1,
-					DepthOrArraySize = 1,
-					MipLevels = 1,
-					SampleDesc = {1, 0},
-					Layout = .ROW_MAJOR,
-				},
-				d3d12.RESOURCE_STATE_COMMON,
-				nil,
-				d3d12.IResource_UUID,
-				(^rawptr)(&pass.buf),
-			)
-			check(hr, "failed to create input buffer")
+	for &track in attach.tracks {
+		hr =
+		gfx_state.device->CreateCommittedResource(
+			&{Type = .UPLOAD},
+			{.CREATE_NOT_ZEROED},
+			&{
+				Dimension = .BUFFER,
+				Width = BUFFER_COUNT * size_of(Shader_Input_Layout),
+				Height = 1,
+				DepthOrArraySize = 1,
+				MipLevels = 1,
+				SampleDesc = {1, 0},
+				Layout = .ROW_MAJOR,
+			},
+			d3d12.RESOURCE_STATE_COMMON,
+			nil,
+			d3d12.IResource_UUID,
+			(^rawptr)(&track.buf),
+		)
+		check(hr, "failed to create input buffer")
 
-			hr = pass.buf->Map(0, &d3d12.RANGE{0, 0}, (^rawptr)(&pass.buf_mapped))
-			check(hr, "failed to map input buffer")
-		}
+		hr = track.buf->Map(0, &d3d12.RANGE{0, 0}, (^rawptr)(&track.buf_mapped))
+		check(hr, "failed to map input buffer")
 	}
 
 	gfx_ffx_blur_make(&attach.ffx_blur)
@@ -636,10 +677,8 @@ gfx_detach :: proc(a: ^Gfx_Attach, allocator := context.allocator) {
 		gfx_descriptor_free(pack.srv)
 	}
 
-	for bucket in a.buckets {
-		for pass in bucket.passes {
-			pass.buf->Release()
-		}
+	for track in a.tracks {
+		track.buf->Release()
 	}
 
 	gfx_ffx_blur_destroy(&a.ffx_blur)
@@ -679,6 +718,8 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 	hr = a.cmd_list->Reset(a.cmd_allocators[bb_idx], nil)
 	check(hr, "failed to reset command list")
 
+	// "SetDescriptorHeaps must be called first.."
+	// https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_DynamicResources.html#setdescriptorheaps-and-setrootsignature.
 	a.cmd_list->SetDescriptorHeaps(1, &gfx_descriptor.heaps[.CBV_SRV_UAV].resource)
 
 	// TODO: Where do we want to put this?
@@ -700,46 +741,115 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 	gfx_ffx_blur_frame(&a.ffx_blur, bb_idx)
 	gfx_ffx_spd_frame(&a.ffx_spd, bb_idx)
 
-	for &bucket in a.buckets {
+	gfx_rect_split(a)
+
+	// Coalesce draws.
+	defer a.draw_count = 0
+	defer a.draw_splits_count = 0
+	{
+		// Ensure these are ready before we do anything.
+		gfx_pipeline_wait(GFX_RECT_CAPS_OPAQUE)
+		gfx_pipeline_wait(GFX_RECT_CAPS_UBER)
+	}
+	{
+		a.cmd_list->SetGraphicsRootSignature(gfx_state.root_sig)
+
+		constants: struct #packed {
+			viewport:     [2]f32,
+			viewport_inv: [2]f32,
+			accum_idx:    u32,
+		}
+
+		constants.viewport = {f32(a.swapchain_res.x), f32(a.swapchain_res.y)}
+		constants.viewport_inv = 1 / constants.viewport
+		constants.accum_idx = cast(u32)gfx_descriptor_idx(a.offscreen[.Downsample].srv)
+
+		a.cmd_list->SetGraphicsRoot32BitConstants(0, size_of(constants) / size_of(u32), &constants, 0)
+	}
+	track_views: [Gfx_Rect_Track]d3d12.VERTEX_BUFFER_VIEW
+	for &view, type in track_views {
+		view.StrideInBytes = size_of(Shader_Input_Layout) / len(Shader_Input_Layout)
+		view.BufferLocation = a.tracks[type].buf->GetGPUVirtualAddress() + u64(bb_idx) * size_of(Shader_Input_Layout)
+		view.SizeInBytes = size_of(Shader_Input_Layout)
+	}
+	i := 0
+	track_starts: [Gfx_Rect_Track]int
+	for limit, split_idx in a.draw_splits[:a.draw_splits_count] {
 		a.cmd_list->ClearDepthStencilView(depth_stencil_view, {.DEPTH}, DEPTH_STENCIL_CLEAR.Depth, DEPTH_STENCIL_CLEAR.Stencil, 0, nil)
 
-		// "SetDescriptorHeaps must be called first.."
-		// https://microsoft.github.io/DirectX-Specs/d3d/HLSL_SM_6_6_DynamicResources.html#setdescriptorheaps-and-setrootsignature.
-		a.cmd_list->SetGraphicsRootSignature(gfx_state.root_sig)
-		{
-			constants: struct #packed {
-				viewport:     [2]f32,
-				viewport_inv: [2]f32,
-				accum_idx:    u32,
+		track_ends := track_starts
+		defer track_starts = track_ends
+
+		Gfx_Special_Split :: struct {
+			caps: Gfx_Rect_Caps,
+			end:  int,
+		}
+		special_splits: [dynamic]Gfx_Special_Split
+		special_splits.allocator = context.temp_allocator
+		special_split_curr: Gfx_Special_Split
+
+		for i < limit {
+			defer i += 1
+
+			#no_bounds_check draw_cmd := a.draw_buffer[i]
+			draw_cmd.inner.depth = u32(i)
+
+			caps := gfx_rect_caps_from_cmd(draw_cmd)
+			track: Gfx_Rect_Track = (caps == GFX_RECT_CAPS_OPAQUE) ? .Opaque : .Special
+
+			// Opaque rendering is back-to-front, to take advantage of the depth buffer.
+			index := (track == .Special) ? track_ends[track] : (MAX_DRAW_CMDS - 1 - track_ends[track])
+			a.tracks[track].buf_mapped[bb_idx][index] = draw_cmd
+			track_ends[track] += 1
+
+			switch track {
+			case .Special:
+				if special_split_curr.caps != {} && special_split_curr.caps != caps {
+					append(&special_splits, special_split_curr)
+				}
+				special_split_curr = {caps, track_ends[track]}
+			case .Opaque:
 			}
-
-			constants.viewport = {f32(a.swapchain_res.x), f32(a.swapchain_res.y)}
-			constants.viewport_inv = 1 / constants.viewport
-			constants.accum_idx = cast(u32)gfx_descriptor_idx(a.offscreen[.Downsample].srv)
-
-			a.cmd_list->SetGraphicsRoot32BitConstants(0, size_of(constants) / size_of(u32), &constants, 0)
 		}
 
-		defer bucket.total = 0
-		for &pass, pass_type in bucket.passes {
-			defer pass.count = 0
-			count := u32(pass.count)
-			(count > 0) or_continue
+		if special_split_curr.end > 0 {
+			append(&special_splits, special_split_curr)
+		}
 
-			index := gfx_pass_meta[pass_type].back_to_front ? 0 : MAX_DRAW_CMDS - pass.count
-
-			view: d3d12.VERTEX_BUFFER_VIEW
-			view.StrideInBytes = size_of(Shader_Input_Layout) / len(Shader_Input_Layout)
-			view.BufferLocation = pass.buf->GetGPUVirtualAddress() + u64(bb_idx) * size_of(Shader_Input_Layout)
-			view.SizeInBytes = size_of(Shader_Input_Layout)
+		// Render everything opaque first.
+		draw_opaque: {
+			count := track_ends[.Opaque] - track_starts[.Opaque]
+			(count > 0) or_break draw_opaque
 
 			a.cmd_list->IASetPrimitiveTopology(.TRIANGLESTRIP)
-			a.cmd_list->IASetVertexBuffers(0, 1, &view)
+			a.cmd_list->IASetVertexBuffers(0, 1, &track_views[.Opaque])
 
-			a.cmd_list->SetPipelineState(gfx_state.pipelines[pass_type])
-			a.cmd_list->DrawInstanced(4, count, 0, u32(index))
+			pipeline := gfx_pipeline_expect(GFX_RECT_CAPS_OPAQUE)
+
+			a.cmd_list->SetPipelineState(pipeline)
+			a.cmd_list->DrawInstanced(4, u32(count), 0, u32(MAX_DRAW_CMDS - 1 - track_ends[.Opaque]))
 		}
 
+		// Render special things front-to-back.
+		last_split_end := track_starts[.Special]
+		draw_special: for split in special_splits {
+			defer last_split_end = split.end
+
+			count := split.end - last_split_end
+			(count > 0) or_break draw_special
+
+			a.cmd_list->IASetPrimitiveTopology(.TRIANGLESTRIP)
+			a.cmd_list->IASetVertexBuffers(0, 1, &track_views[.Special])
+
+			pipeline := gfx_pipeline_query(split.caps) or_else gfx_pipeline_expect(GFX_RECT_CAPS_UBER)
+
+			a.cmd_list->SetPipelineState(pipeline)
+			a.cmd_list->DrawInstanced(4, u32(count), 0, u32(last_split_end))
+		}
+
+		// Prepare blurred textures for sampling in the glass shader.
+		// Skip if this is the last known split.
+		(split_idx < a.draw_splits_count - 1) or_continue
 		// Downsample colour output buffer.
 		{
 			barriers := [?]d3d12.RESOURCE_BARRIER {
@@ -755,7 +865,6 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
 		}
 		gfx_ffx_spd_mount(&a.ffx_spd, a.cmd_list, a.offscreen[.Render].texture, a.offscreen[.Working].texture)
-
 		// Select a few mips to use for blurring.
 		{
 			barriers := [?]d3d12.RESOURCE_BARRIER {
@@ -793,41 +902,39 @@ gfx_render :: proc(a: ^Gfx_Attach) {
 		}
 	}
 
-	if true {
-		{
-			barriers := [?]d3d12.RESOURCE_BARRIER {
-				{Type = .TRANSITION, Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.RENDER_TARGET}, {.COPY_SOURCE}}},
-				{Type = .TRANSITION, Transition = {bb_rt, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, d3d12.RESOURCE_STATE_PRESENT, {.COPY_DEST}}},
-			}
-			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
+	// Copy from staging render target to swapchain buffer.
+	{
+		barriers := [?]d3d12.RESOURCE_BARRIER {
+			{Type = .TRANSITION, Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.RENDER_TARGET}, {.COPY_SOURCE}}},
+			{Type = .TRANSITION, Transition = {bb_rt, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, d3d12.RESOURCE_STATE_PRESENT, {.COPY_DEST}}},
 		}
-		{
-			copy_src: d3d12.TEXTURE_COPY_LOCATION
-			copy_src.pResource = a.offscreen[.Render].texture
-			copy_src.Type = .SUBRESOURCE_INDEX
-			copy_src.SubresourceIndex = 0
+		a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
+	}
+	{
+		copy_src: d3d12.TEXTURE_COPY_LOCATION
+		copy_src.pResource = a.offscreen[.Render].texture
+		copy_src.Type = .SUBRESOURCE_INDEX
+		copy_src.SubresourceIndex = 0
 
-			copy_dst: d3d12.TEXTURE_COPY_LOCATION
-			copy_dst.pResource = bb_rt
-			copy_dst.Type = .SUBRESOURCE_INDEX
-			copy_dst.SubresourceIndex = 0
+		copy_dst: d3d12.TEXTURE_COPY_LOCATION
+		copy_dst.pResource = bb_rt
+		copy_dst.Type = .SUBRESOURCE_INDEX
+		copy_dst.SubresourceIndex = 0
 
-			a.cmd_list->CopyTextureRegion(&copy_dst, 0, 0, 0, &copy_src, nil)
+		a.cmd_list->CopyTextureRegion(&copy_dst, 0, 0, 0, &copy_src, nil)
+	}
+	{
+		barriers := [?]d3d12.RESOURCE_BARRIER {
+			{Type = .TRANSITION, Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.COPY_SOURCE}, {.RENDER_TARGET}}},
+			{Type = .TRANSITION, Transition = {bb_rt, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.COPY_DEST}, d3d12.RESOURCE_STATE_PRESENT}},
 		}
-		{
-			barriers := [?]d3d12.RESOURCE_BARRIER {
-				{Type = .TRANSITION, Transition = {a.offscreen[.Render].texture, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.COPY_SOURCE}, {.RENDER_TARGET}}},
-				{Type = .TRANSITION, Transition = {bb_rt, d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES, {.COPY_DEST}, d3d12.RESOURCE_STATE_PRESENT}},
-			}
-			a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
-		}
+		a.cmd_list->ResourceBarrier(len(barriers), raw_data(&barriers))
 	}
 
 	hr = a.cmd_list->Close()
 	check(hr, "failed to close command list")
 
-	cmd_lists := [?]^d3d12.IGraphicsCommandList{a.cmd_list}
-	gfx_state.queue->ExecuteCommandLists(len(cmd_lists), (^^d3d12.ICommandList)(&cmd_lists[0]))
+	gfx_state.queue->ExecuteCommandLists(1, (^^d3d12.ICommandList)(&a.cmd_list))
 
 	// TODO: Recreate renderer if hr is "DXGI_ERROR_DEVICE_REMOVED" or DXGI_ERROR_DEVICE_RESET; IDevice->GetDeviceRemovedReason().
 	{
@@ -850,6 +957,113 @@ gfx_buffer_idx :: proc(attach: ^Gfx_Attach) -> int {
 	}
 }
 
+// https://vulkan-tutorial.com/Generating_Mipmaps#page_Image-creation.
+gfx_mips_for_resolution :: #force_inline proc "contextless" (size: [2]$T) -> int where intrinsics.type_is_integer(T) {
+	return cast(int)bits.log2(linalg.max(size)) + 1
+}
+
+// Underlying command stream (vertex buffer).
+Gfx_Rect_Track :: enum {
+	Opaque,
+	Special,
+}
+
+// Required pipline capabilities to draw this rectangle.
+Gfx_Rect_Cap :: enum {
+	Texture,
+	Rounded,
+	Border,
+	Glass,
+}
+Gfx_Rect_Caps :: bit_set[Gfx_Rect_Cap;u8]
+GFX_RECT_CAPS_OPAQUE :: Gfx_Rect_Caps{}
+GFX_RECT_CAPS_UBER :: ~Gfx_Rect_Caps{}
+GFX_RECT_CAP_PERMS :: 1 << len(Gfx_Rect_Cap)
+
+// Convert caps into shader permutations.
+gfx_rect_caps_specs :: proc(caps: Gfx_Rect_Caps) -> (vs: shaders.Rect_Vs_Spec, ps: shaders.Rect_Ps_Spec) {
+	if .Texture in caps {
+		vs.texture = .Yes
+		ps.texture = .Yes
+	}
+	if .Rounded in caps {
+		vs.rounded = .Yes
+		ps.rounded = .Yes
+	}
+	if .Border in caps {
+		vs.border = .Yes
+		ps.border = .Yes
+	}
+	if .Glass in caps {
+		ps.glass = .Yes
+	}
+	return
+}
+
+gfx_rect_caps_from_cmd :: proc(input: Shader_Input) -> (caps: Gfx_Rect_Caps) {
+	if input.texi != max(u32) {
+		caps += {.Texture}
+	}
+	if input.corner > 0 {
+		caps += {.Rounded}
+	}
+	if input.inner.border > 0 {
+		caps += {.Border}
+	}
+	if input.inner.glass {
+		caps += {.Glass}
+	}
+	return
+}
+
+gfx_rect_split :: proc(attach: ^Gfx_Attach) {
+	defer attach.draw_splits_count += 1
+	attach.draw_splits[attach.draw_splits_count] = attach.draw_count
+}
+
+gfx_rect_reserve :: proc(attach: ^Gfx_Attach, count: int) -> []Shader_Input {
+	defer attach.draw_count += count
+	return attach.draw_buffer[attach.draw_count:attach.draw_count + count]
+}
+
+gfx_rect_props :: proc(
+	slot: ^Shader_Input,
+	off: [2]f32,
+	dim: [2]f32,
+	color: [4]f32,
+	texc := [4]f32{},
+	texi := max(u32),
+	rounding: f32 = 0,
+	hardness: f32 = 1,
+	border: u32 = 0,
+	rounding_corners: [4]bool = true,
+	glass := false,
+) {
+	color := linalg.array_cast(color * 255, u8)
+
+	slot.rect = {off.x, dim.x, off.y, dim.y}
+	slot.color[0] = color
+	slot.color[1] = color
+	slot.color[2] = color
+	slot.color[3] = color
+	slot.texc = texc
+	slot.texi = texi
+	slot.corner = rounding
+	slot.softness = hardness
+	slot.inner.round_tl = rounding_corners[0]
+	slot.inner.round_tr = rounding_corners[1]
+	slot.inner.round_bl = rounding_corners[2]
+	slot.inner.round_br = rounding_corners[3]
+	slot.inner.border = border
+	slot.inner.glass = glass
+}
+
+gfx_rect_null :: proc(slot: ^Shader_Input) {
+	// We want to clear this to the simplest possible rectangle to draw.
+	// This means opaque (no special shader combinatrics).
+	slot^ = {}
+}
+
 gfx_attach_draw :: proc(
 	attach: ^Gfx_Attach,
 	off: [2]f32,
@@ -861,61 +1075,8 @@ gfx_attach_draw :: proc(
 	hardness: f32 = 1,
 	border: u32 = 0,
 	rounding_corners: [4]bool = true,
-	test: bool = false,
-) -> ^Shader_Input {
-	bucket_type: Gfx_Bucket
-	pass_type: Gfx_Pass
-	switch true {
-	case color.a < 1, rounding > 0, hardness < 1:
-		pass_type = .Expensive
-	case border > 0:
-		pass_type = .Expensive
-	case texi != max(u32):
-		pass_type = .Expensive
-	case texi != max(u32):
-		pass_type = .Opaque_Texture
-	case:
-		pass_type = .Opaque
-	}
-
-	if test {
-		bucket_type = .Fore
-		pass_type = .Glass
-	}
-
-	bucket := &attach.buckets[bucket_type]
-	pass := &bucket.passes[pass_type]
-	pass_meta := gfx_pass_meta[pass_type]
-
-	index := pass_meta.back_to_front ? pass.count : (MAX_DRAW_CMDS - 1 - pass.count)
-	defer pass.count += 1
-
-	depth := u32(bucket.total)
-	defer bucket.total += 1
-
-	color := linalg.array_cast(color * 255, u8)
-
-	buf := gfx_buffer_idx(attach)
-	pass.buf_mapped[buf][index].rect = {off.x, dim.x, off.y, dim.y}
-	pass.buf_mapped[buf][index].color[0] = color
-	pass.buf_mapped[buf][index].color[1] = color
-	pass.buf_mapped[buf][index].color[2] = color
-	pass.buf_mapped[buf][index].color[3] = color
-	pass.buf_mapped[buf][index].texc = texc
-	pass.buf_mapped[buf][index].texi = texi
-	pass.buf_mapped[buf][index].corner = rounding
-	pass.buf_mapped[buf][index].softness = hardness
-	pass.buf_mapped[buf][index].inner.round_tl = rounding_corners[0]
-	pass.buf_mapped[buf][index].inner.round_tr = rounding_corners[1]
-	pass.buf_mapped[buf][index].inner.round_bl = rounding_corners[2]
-	pass.buf_mapped[buf][index].inner.round_br = rounding_corners[3]
-	pass.buf_mapped[buf][index].inner.depth = depth
-	pass.buf_mapped[buf][index].inner.border = border
-
-	return &pass.buf_mapped[buf][index]
-}
-
-// https://vulkan-tutorial.com/Generating_Mipmaps#page_Image-creation.
-gfx_mips_for_resolution :: #force_inline proc "contextless" (size: [2]$T) -> int where intrinsics.type_is_integer(T) {
-	return cast(int)bits.log2(linalg.max(size)) + 1
+	glass := false,
+) {
+	reserve := gfx_rect_reserve(attach, 1)
+	gfx_rect_props(raw_data(reserve), off, dim, color, texc, texi, rounding, hardness, border, rounding_corners, glass)
 }

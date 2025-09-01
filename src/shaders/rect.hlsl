@@ -41,6 +41,9 @@ float4 pack_rounding(uint4 pack) {
 float pack_hardness(uint4 pack) {
 	return asfloat(pack.w);
 }
+bool pack_glass(uint4 pack) {
+	return (pack.y & (0x1 << 28)) > 0;
+}
 
 InputPs vs_main(InputVs input)
 {
@@ -225,6 +228,7 @@ float4 ps_main(InputPs input) : SV_Target
 	float4 corner = pack_rounding(input.pack);
 	float hardness = pack_hardness(input.pack);
 	float border = pack_border(input.pack);
+	bool glass = pack_glass(input.pack);
 
 #ifdef SPEC_TEXTURE
 	if (texi != 0xFFFFFFFF) {
@@ -264,17 +268,19 @@ float4 ps_main(InputPs input) : SV_Target
 #endif
 
 #ifdef SPEC_GLASS
-	float2 input_pos_frac = input.pos.xy * draw_constants.viewport_inv;
+	if (glass) {
+		float2 input_pos_frac = input.pos.xy * draw_constants.viewport_inv;
 
-	Texture2D texture_prev = ResourceDescriptorHeap[draw_constants.accum_idx];
-	float3 accum = 0;
-	uint mip_start = 3;
-	uint mip_end = 7;
-	for (int i = mip_start; i < mip_end; i++) {
-		accum += texture_prev.SampleLevel(sampler_wrap_linear, input_pos_frac, i).xyz;
+		Texture2D texture_prev = ResourceDescriptorHeap[draw_constants.accum_idx];
+		float3 accum = 0;
+		uint mip_start = 3;
+		uint mip_end = 7;
+		for (int i = mip_start; i < mip_end; i++) {
+			accum += texture_prev.SampleLevel(sampler_wrap_linear, input_pos_frac, i).xyz;
+		}
+		color.xyz *= accum / float(mip_end - mip_start);
+		color.xyz *= lerp( .95f, 1.f, noise1(input_pos_frac.x, input_pos_frac.y) );
 	}
-	color.xyz *= accum / float(mip_end - mip_start);
-	color.xyz *= lerp( .95f, 1.f, noise1(input_pos_frac.x, input_pos_frac.y) );
 #endif
 
     return float4(color.xyz, color.a);

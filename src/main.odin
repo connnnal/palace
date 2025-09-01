@@ -122,10 +122,12 @@ main :: proc() {
 			im_widget_dyn_draw(render, v, v.wrapper)
 		}
 
-		// gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {1, 0, 1, 1}, rounding = 32, rounding_corners = true, test = true)
+		gfx_rect_split(render.attach)
+		gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {.81, 0, .82, 1}, rounding = 32, rounding_corners = true, glass = true)
 		gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, {1, 0, 0, 1}, rounding = 32, hardness = 0.1, rounding_corners = true)
 		gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, {1, 1, 0, 1}, rounding = 32, border = 8, rounding_corners = true)
-		gfx_attach_draw(render.attach, {128, 64 + 16} + {128, 64}, {512, 128 * 5}, p[.Void], hardness = 1, rounding = 32, rounding_corners = true, test = true)
+		gfx_rect_split(render.attach)
+		gfx_attach_draw(render.attach, {128, 64 + 16} + {128, 64}, {512, 128 * 5}, p[.Void], hardness = 1, rounding = 32, rounding_corners = true, glass = true)
 	}
 
 	wind_open(&w)
