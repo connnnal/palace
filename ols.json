@@ -4,6 +4,6 @@
 	"enable_hover": true,
 	"enable_snippets": true,
 	"collections": [
-		{ "name": "lib", "path": "lib" },
+		{ "name": "lib", "path": "lib" }
 	]
 }

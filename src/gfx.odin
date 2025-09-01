@@ -9,6 +9,7 @@ import "core:math/linalg"
 import "core:sync"
 import "core:sync/chan"
 import "core:thread"
+import "core:time"
 
 import win "core:sys/windows"
 import "vendor:directx/d3d12"
@@ -305,14 +306,19 @@ gfx_pipeline_runner :: proc() {
 			SampleDesc = {1, 0},
 		}
 
-		hr: win.HRESULT
-		hr = gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pack.state))
-		checkf(hr, "failed to create graphics pipeline (caps: %#v)", caps)
+		tick_duration: time.Duration
+		{
+			tick_start := time.tick_now()
+			defer tick_duration = time.tick_since(tick_start)
+
+			hr := gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pack.state))
+			checkf(hr, "failed to create graphics pipeline (caps: %#v)", caps)
+		}
 
 		sync.atomic_store_explicit(&pack.phase, sync.Futex(Gfx_Pipeline_Phase.Ready), .Release)
 		sync.futex_signal(&pack.phase)
 
-		log.debugf("cooked pipeline: caps %#v", caps)
+		log.debugf("cooked pipeline: caps %#v, time %v", caps, tick_duration)
 	}
 	for pack in gfx_state.pipelines {
 		if pack.state != nil {
@@ -1017,6 +1023,7 @@ gfx_rect_caps_from_cmd :: proc(input: Shader_Input) -> (caps: Gfx_Rect_Caps) {
 	return
 }
 
+// TODO: Support pass "modifications"; translation matrix, MSAA, clip rect, etc.
 gfx_rect_split :: proc(attach: ^Gfx_Attach, prepare_glass := true) {
 	defer attach.draw_splits_count += 1
 	attach.draw_splits[attach.draw_splits_count] = {

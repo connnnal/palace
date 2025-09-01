@@ -125,10 +125,9 @@ gfx_descriptor_idx :: proc(handle: $H/Gfx_Descriptor_Handle($T, $C), sub_index :
 		idx, ok = sa.get(&gfx_descriptor.heaps[T].slots, handle.slot)
 	} else {
 		// Let's say the heap comes after the slot array in memory.
-		// Note it's an implementation detail that offset allocator indices are >0!!
 		idx = int(GFX_DESCRIPTOR_SPECS[T].count_slots) + int(handle.allocation.offset)
 
-		// TODO: Ensure we have a method to detect zero-initialised (invalid) handles.
+		// TODO: Differentiate uninitalised heap handles.
 		ok = true
 
 		// Allow sub-indexing.

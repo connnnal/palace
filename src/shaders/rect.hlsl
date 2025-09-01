@@ -86,7 +86,7 @@ InputPs vs_main(InputVs input)
 	);
 #endif
 
-#if defined(SPEC_ROUNDED)
+#ifdef SPEC_ROUNDED
 	// Hardness is a fraction, need to reason with pixels here.
 	float inset = 1 - 1 / pack_hardness(input.pack);
 	float2 fac = inset / (2 * shape_size);

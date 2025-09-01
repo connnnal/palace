@@ -176,14 +176,31 @@ work_callback :: proc(params: ^Compile_Work_Params) {
 	primary_output := result->PrimaryOutput()
 	log.assertf(primary_output == .OBJECT, "unexpected output type for %q, got %q", shader_name, primary_output)
 
-	out_kind: if result->HasOutput(.REMARKS) {
-		contents: ^dxc.IBlobUtf8
-		hr = result->GetOutput(.REMARKS, dxc.IBlobUtf8_UUID, &contents, nil)
-		win.SUCCEEDED(hr) or_break out_kind
-		defer contents->Release()
-		result_slice := ([^]u8)(contents->GetStringPointer())[:contents->GetStringLength()]
-		(len(result_slice) > 0) or_break out_kind
-		log.warnf("%q remarks: %s", shader_name, result_slice)
+	out_remarks: if result->HasOutput(.REMARKS) {
+		out: ^dxc.IBlobUtf8
+		hr = result->GetOutput(.REMARKS, dxc.IBlobUtf8_UUID, &out, nil)
+		win.SUCCEEDED(hr) or_break out_remarks
+		defer out->Release()
+
+		out_slice := ([^]u8)(out->GetStringPointer())[:out->GetStringLength()]
+		(len(out_slice) > 0) or_break out_remarks
+		log.warnf("%q remarks: %s", shader_name, out_slice)
+	}
+
+	out_timing: if result->HasOutput(.TIME_REPORT) {
+		out_blob: ^dxc.IBlob
+		hr = result->GetOutput(.TIME_REPORT, dxc.IBlob_UUID, &out_blob, nil)
+		win.SUCCEEDED(hr) or_break out_timing
+		defer out_blob->Release()
+
+		out_utf8: ^dxc.IBlobUtf8
+		hr = utils->GetBlobAsUtf8(out_blob, &out_utf8)
+		win.SUCCEEDED(hr) or_break out_timing
+		defer out_utf8->Release()
+
+		out_slice := ([^]u8)(out_utf8->GetStringPointer())[:out_utf8->GetStringLength()]
+		(len(out_slice) > 0) or_break out_timing
+		log.warnf("%q time report: %s", shader_name, out_slice)
 	}
 
 	status: win.HRESULT
@@ -191,31 +208,31 @@ work_callback :: proc(params: ^Compile_Work_Params) {
 	log.assertf(win.SUCCEEDED(hr), "failed to query status for %q", shader_name)
 
 	if win.SUCCEEDED(status) {
-		result_blob: ^dxc.IBlob
-		hr = result->GetResult(&result_blob)
+		out_blob: ^dxc.IBlob
+		hr = result->GetResult(&out_blob)
 		log.assertf(win.SUCCEEDED(hr), "failed to get result blob for %q", shader_name)
-		defer result_blob->Release()
+		defer out_blob->Release()
 
-		result_slice := ([^]byte)(result_blob->GetBufferPointer())[:result_blob->GetBufferSize()]
+		out_slice := ([^]byte)(out_blob->GetBufferPointer())[:out_blob->GetBufferSize()]
 
 		// Output on the work queue allocator so the calling thread can recieve this value.
 		params.dependencies = include_handler_deps(include_handler, work_queue.allocator)
-		params.code = slice.clone(result_slice, work_queue.allocator)
+		params.code = slice.clone(out_slice, work_queue.allocator)
 		params.ok = true
 	} else {
-		errors_blob: ^dxc.IBlobEncoding
-		hr = result->GetErrorBuffer(&errors_blob)
+		error_blob: ^dxc.IBlobEncoding
+		hr = result->GetErrorBuffer(&error_blob)
 		log.assertf(win.SUCCEEDED(hr), "failed to get error buffer for %q", shader_name)
-		defer errors_blob->Release()
+		defer error_blob->Release()
 
-		errors_utf8: ^dxc.IBlobUtf8
-		hr = utils->GetBlobAsUtf8(errors_blob, &errors_utf8)
+		error_utf8: ^dxc.IBlobUtf8
+		hr = utils->GetBlobAsUtf8(error_blob, &error_utf8)
 		log.assertf(win.SUCCEEDED(hr), "failed to get error buffer as utf8 for %q", shader_name)
-		defer errors_utf8->Release()
+		defer error_utf8->Release()
 
-		errors := ([^]u8)(errors_utf8->GetStringPointer())[:errors_utf8->GetStringLength()]
-		errors_trimmed := strings.trim_space(cast(string)errors)
-		log.errorf("%q failed to compile: %s", shader_name, errors_trimmed)
+		error_slice := ([^]u8)(error_utf8->GetStringPointer())[:error_utf8->GetStringLength()]
+		error_trimmed := strings.trim_space(cast(string)error_slice)
+		log.errorf("%q failed to compile: %s", shader_name, error_trimmed)
 	}
 }
 

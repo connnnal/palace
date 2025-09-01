@@ -212,9 +212,6 @@ im_widget_textbox_destroy :: proc(this: ^Im_Widget_Textbox) {
 im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_Textbox) {
 	im_widget_none_draw(render, node)
 
-	// render.target->PushAxisAlignedClip(&rect, .PER_PRIMITIVE)
-	// defer render.target->PopAxisAlignedClip()
-
 	hr: win.HRESULT
 	{
 		selection := this.box.selection
@@ -333,13 +330,6 @@ im_widget_text_destroy :: proc(node: ^Im_Node, this: ^Im_Widget_Text) {
 
 // Default (no widget).
 im_widget_none_draw :: proc(render: Render, node: ^Im_Node) {
-	// render.brush->SetColor(auto_cast &node.color)
-	// if node.color == p[.Background] {
-	// 	render.target->FillRectangle(&rect, render.brush)
-	// 	render.target->FillRectangle(&rect, render.bmp)
-	// } else {
-	// 	render.target->FillRectangle(&rect, render.brush)
-	// }
 	gfx_attach_draw(render.attach, {f32(node.measure.pos.x), f32(node.measure.pos.y)}, {f32(node.measure.size.x), f32(node.measure.size.y)}, node.color)
 }
 
