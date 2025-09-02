@@ -41,8 +41,59 @@ float4 pack_rounding(uint4 pack) {
 float pack_hardness(uint4 pack) {
 	return asfloat(pack.w);
 }
-bool pack_glass(uint4 pack) {
+bool pack_oklab(uint4 pack) {
 	return (pack.y & (0x1 << 28)) > 0;
+}
+bool pack_glass(uint4 pack) {
+	return (pack.y & (0x1 << 29)) > 0;
+}
+
+//
+// https://github.com/patriciogonzalezvivo/lygia/blob/main/color/space/oklab2rgb.hlsl.
+// https://github.com/patriciogonzalezvivo/lygia/blob/main/color/space/rgb2oklab.hlsl.
+//
+/*
+contributors: Bjorn Ottosson (@bjornornorn)
+description: Oklab to linear RGB https://bottosson.github.io/posts/oklab/
+use: <float3\float4> oklab2rgb(<float3|float4> oklab)
+license: 
+    - MIT License (MIT) Copyright (c) 2020 Björn Ottosson
+*/
+float3 oklab2rgb(float3 oklab) {
+	static const float3x3 OKLAB2RGB_A = float3x3(
+	    1.0,           1.0,           1.0,
+	    0.3963377774, -0.1055613458, -0.0894841775,
+	    0.2158037573, -0.0638541728, -1.2914855480);
+
+	static const float3x3 OKLAB2RGB_B = float3x3(
+	    4.0767416621, -1.2684380046, -0.0041960863,
+	    -3.3077115913, 2.6097574011, -0.7034186147,
+	    0.2309699292, -0.3413193965, 1.7076147010);
+
+    float3 lms = mul(OKLAB2RGB_A, oklab);
+    return mul(OKLAB2RGB_B, (lms * lms * lms));
+}
+/*
+contributors: Bjorn Ottosson (@bjornornorn)
+description: |
+    Linear rgb to OKLab https://bottosson.github.io/posts/oklab/
+use: <float3\float4> rgb2oklab(<float3|float4> rgb)
+license: 
+    - MIT License (MIT) Copyright (c) 2020 Björn Ottosson
+*/
+float3 rgb2oklab(float3 rgb) {
+	static const float3x3 RGB2OKLAB_A = float3x3(
+	    0.2104542553, 1.9779984951, 0.0259040371,
+	    0.7936177850, -2.4285922050, 0.7827717662,
+	    -0.0040720468, 0.4505937099, -0.8086757660);
+
+	static const float3x3 RGB2OKLAB_B = float3x3(
+	    0.4122214708, 0.2119034982, 0.0883024619,
+	    0.5363325363, 0.6806995451, 0.2817188376,
+	    0.0514459929, 0.1073969566, 0.6299787005);
+
+    float3 lms = mul(RGB2OKLAB_B, rgb);
+    return mul(RGB2OKLAB_A, sign(lms) * pow(abs(lms), float3(0.3333333333333, 0.3333333333333, 0.3333333333333)));
 }
 
 InputPs vs_main(InputVs input)
@@ -77,7 +128,16 @@ InputPs vs_main(InputVs input)
 	color += (input.id == 1 ? input.color[1] : 0.0f);
 	color += (input.id == 2 ? input.color[2] : 0.0f);
 	color += (input.id == 3 ? input.color[3] : 0.0f);
-	output.color = float4(color.xyz * color.a, color.a);
+	color.xyz *= color.a;
+#ifdef SPEC_OKLAB
+	if (pack_oklab(input.pack)) {
+		// We inherit the alpha pre-multiply from above into this conversion.
+		// I'm uncertain if we'll lose "precision" in Oklab space?
+		// Regardless, this avoids a multiply in the pixel shader.
+		color.xyz = rgb2oklab(color.xyz);
+	}
+#endif
+	output.color = color;
 
 #ifdef SPEC_TEXTURE
 	output.tex = float2(
@@ -228,7 +288,14 @@ float4 ps_main(InputPs input) : SV_Target
 	float4 corner = pack_rounding(input.pack);
 	float hardness = pack_hardness(input.pack);
 	float border = pack_border(input.pack);
+	bool oklab = pack_oklab(input.pack);
 	bool glass = pack_glass(input.pack);
+
+#ifdef SPEC_OKLAB
+	if (oklab) {
+		color.xyz = oklab2rgb(color.xyz);
+	}
+#endif
 
 #ifdef SPEC_TEXTURE
 	if (texi != 0xFFFFFFFF) {
@@ -283,5 +350,5 @@ float4 ps_main(InputPs input) : SV_Target
 	}
 #endif
 
-    return float4(color.xyz, color.a);
+    return color;
 }

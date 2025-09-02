@@ -41,6 +41,8 @@ main :: proc() {
 
 	@(static) frame: int
 
+	@(static) oklab := true
+
 	update_callback :: proc(w: ^Window, area: [2]i32, dt: f32) {
 		superluminal.InstrumentationScope("Update", color = superluminal.MAKE_COLOR(0, 0, 255))
 
@@ -94,13 +96,24 @@ main :: proc() {
 					}
 				}
 			}
-
-			im_draws(&w.im, root)
 		}
+
+		im_draws(&w.im, root)
 
 		// TODO: Not a correct solution.
 		if area.x > 0 && area.y > 0 {
 			im_recurse(root, area)
+		}
+
+		{
+			it: int
+			for ev in wind_events_next(&it, w) {
+				key := ev.value.(rune) or_continue
+				(key == 'a') or_continue
+				oklab = !oklab
+				wind_events_pop(&it)
+			}
+
 		}
 
 		// Drain any uncollected inputs.
@@ -122,13 +135,40 @@ main :: proc() {
 			im_widget_dyn_draw(render, v, v.wrapper)
 		}
 
+		// gfx_rect_split(render.attach)
+		// gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, [4]f32{.81, 0, .82, 1}, rounding = 32, rounding_corners = true, glass = true)
+		// gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, [4]f32{1, 0, 0, 1}, rounding = 32, hardness = 0.1, rounding_corners = true)
+		// gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, [4]f32{1, 1, 0, 1}, rounding = 32, border = 8, rounding_corners = true)
+		// gfx_rect_split(render.attach)
+		// gfx_attach_draw(render.attach, {128, 64 + 16} + {128, 64}, {512, 128 * 5}, p[.Void], hardness = 1, rounding = 32, rounding_corners = true, glass = true)
+		// gfx_attach_draw(render.attach, {128, 64 + 16} + {128, 64}, {512, 128 * 1}, p[.Text])
 		gfx_rect_split(render.attach)
-		gfx_attach_draw(render.attach, {128, 64 + 16}, {512, 128 * 5}, {.81, 0, .82, 1}, rounding = 32, rounding_corners = true, glass = true)
-		gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, {1, 0, 0, 1}, rounding = 32, hardness = 0.1, rounding_corners = true)
-		gfx_attach_draw(render.attach, {128, 64 + 16} + 256, {512, 128 * 5}, {1, 1, 0, 1}, rounding = 32, border = 8, rounding_corners = true)
-		gfx_rect_split(render.attach)
-		gfx_attach_draw(render.attach, {128, 64 + 16} + {128, 64}, {512, 128 * 5}, p[.Void], hardness = 1, rounding = 32, rounding_corners = true, glass = true)
-		gfx_attach_draw(render.attach, {128, 64 + 16} + {128, 64}, {512, 128 * 1}, p[.Text])
+		gfx_attach_draw(
+			render.attach,
+			{128, 64 + 16} + {256, 256},
+			{1024, 256},
+			// {{0.43, 0.49, 0.9, 1}, {0.43, 0.36, 0.71, 1}, {0.43, 0.49, 0.9, 1}, {0.43, 0.36, 0.71, 1}},
+			// {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 0, 1, 1}},
+			{{0.27, 0.23, 0.56, 1}, {0.85, 0.3, 0.29, 1}, {0.27, 0.23, 0.56, 1}, {0.85, 0.3, 0.29, 1}},
+			hardness = 1,
+			rounding = 32,
+			rounding_corners = true,
+			glass = true,
+			oklab = oklab,
+		)
+		gfx_attach_draw(
+			render.attach,
+			{128, 64 + 16} + {256, 256 + 256},
+			{1024, 256},
+			// {{0.43, 0.49, 0.9, 1}, {0.43, 0.36, 0.71, 1}, {0.43, 0.49, 0.9, 1}, {0.43, 0.36, 0.71, 1}},
+			// {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 0, 1, 1}},
+			{{0.27, 0.23, 0.56, 1}, {0.85, 0.3, 0.29, 1}, {0.27, 0.23, 0.56, 1}, {0.85, 0.3, 0.29, 1}},
+			hardness = 1,
+			rounding = 32,
+			rounding_corners = true,
+			glass = true,
+			oklab = false,
+		)
 	}
 
 	wind_open(&w)

@@ -42,6 +42,13 @@ shaders = [
 					{ name = "YES", defines = ["SPEC_BORDER"] }
 				]
 			}
+			{
+				name = "OKLAB"
+				tweaks = [
+					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_OKLAB"] }
+				]
+			}
 		]
 	}
 	{
@@ -80,6 +87,13 @@ shaders = [
 				tweaks = [
 					{ name = "NO" }
 					{ name = "YES", defines = ["SPEC_BORDER"] }
+				]
+			}
+			{
+				name = "OKLAB"
+				tweaks = [
+					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_OKLAB"] }
 				]
 			}
 		]

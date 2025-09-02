@@ -236,7 +236,7 @@ im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_
 			win.SUCCEEDED(hr) or_break drag
 
 			for test in hit_test[:hit_test_count] {
-				gfx_attach_draw(render.attach, {test.left, test.top}, {test.width, test.height}, {1, 1, 1, 0.6})
+				gfx_attach_draw(render.attach, {test.left, test.top}, {test.width, test.height}, [4]f32{1, 1, 1, 0.6})
 			}
 		}
 
@@ -258,7 +258,7 @@ im_widget_textbox_draw :: proc(render: Render, node: ^Im_Node, this: ^Im_Widget_
 				height = metrics.height
 			}
 
-			gfx_attach_draw(render.attach, {f32(node.measure.pos.x), f32(node.measure.pos.y)} + offset, {4, height}, {0, 1, 0, 1})
+			gfx_attach_draw(render.attach, {f32(node.measure.pos.x), f32(node.measure.pos.y)} + offset, {4, height}, [4]f32{0, 1, 0, 1})
 		}
 	}
 

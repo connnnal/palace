@@ -313,6 +313,9 @@ gfx_pipeline_runner :: proc() {
 
 			hr := gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pack.state))
 			checkf(hr, "failed to create graphics pipeline (caps: %#v)", caps)
+
+			runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+			pack.state->SetName(win.utf8_to_wstring(fmt.tprintf("Graphics Pipeline State (%v)", caps)))
 		}
 
 		sync.atomic_store_explicit(&pack.phase, sync.Futex(Gfx_Pipeline_Phase.Ready), .Release)
@@ -382,6 +385,7 @@ Shader_Input :: struct {
 			round_tr: bool | 1,
 			round_bl: bool | 1,
 			round_br: bool | 1,
+			oklab:    bool | 1,
 			glass:    bool | 1,
 		},
 		corner:   f32,
@@ -976,6 +980,7 @@ Gfx_Rect_Cap :: enum {
 	Rounded,
 	Border,
 	Glass,
+	Oklab,
 	Translucent,
 }
 Gfx_Rect_Caps :: bit_set[Gfx_Rect_Cap;u8]
@@ -997,6 +1002,10 @@ gfx_rect_caps_specs :: proc(caps: Gfx_Rect_Caps) -> (vs: shaders.Rect_Vs_Spec, p
 		vs.border = .Yes
 		ps.border = .Yes
 	}
+	if .Oklab in caps {
+		vs.oklab = .Yes
+		ps.oklab = .Yes
+	}
 	if .Glass in caps {
 		ps.glass = .Yes
 	}
@@ -1017,7 +1026,10 @@ gfx_rect_caps_from_cmd :: proc(input: Shader_Input) -> (caps: Gfx_Rect_Caps) {
 	if input.inner.glass {
 		caps += {.Glass}
 	}
-	if input.color[0][3] < 255 || input.color[1][3] < 255 || input.color[2][3] < 255 || input.color[3][3] < 255 {
+	if input.inner.oklab {
+		caps += {.Oklab}
+	}
+	if input.color[0].a < 255 || input.color[1].a < 255 || input.color[2].a < 255 || input.color[3].a < 255 {
 		caps += {.Translucent}
 	}
 	return
@@ -1041,22 +1053,21 @@ gfx_rect_props :: proc(
 	slot: ^Shader_Input,
 	off: [2]f32,
 	dim: [2]f32,
-	color: [4]f32,
+	color: [4][4]f32,
 	texc := [4]f32{},
 	texi := max(u32),
 	rounding: f32 = 0,
 	hardness: f32 = 1,
 	border: u32 = 0,
 	rounding_corners: [4]bool = true,
+	oklab := false,
 	glass := false,
 ) {
-	color := linalg.array_cast(color * 255, u8)
-
 	slot.rect = {off.x, dim.x, off.y, dim.y}
-	slot.color[0] = color
-	slot.color[1] = color
-	slot.color[2] = color
-	slot.color[3] = color
+	slot.color[0] = linalg.array_cast(color[0] * 255, u8)
+	slot.color[1] = linalg.array_cast(color[1] * 255, u8)
+	slot.color[2] = linalg.array_cast(color[2] * 255, u8)
+	slot.color[3] = linalg.array_cast(color[3] * 255, u8)
 	slot.texc = texc
 	slot.texi = texi
 	slot.corner = rounding
@@ -1066,6 +1077,7 @@ gfx_rect_props :: proc(
 	slot.inner.round_bl = rounding_corners[2]
 	slot.inner.round_br = rounding_corners[3]
 	slot.inner.border = border
+	slot.inner.oklab = oklab
 	slot.inner.glass = glass
 }
 
@@ -1079,15 +1091,16 @@ gfx_attach_draw :: proc(
 	attach: ^Gfx_Attach,
 	off: [2]f32,
 	dim: [2]f32,
-	color: [4]f32,
+	color: [4][4]f32,
 	texc := [4]f32{},
 	texi := max(u32),
 	rounding: f32 = 0,
 	hardness: f32 = 1,
 	border: u32 = 0,
 	rounding_corners: [4]bool = true,
+	oklab := false,
 	glass := false,
 ) {
 	reserve := gfx_rect_reserve(attach, 1)
-	gfx_rect_props(raw_data(reserve), off, dim, color, texc, texi, rounding, hardness, border, rounding_corners, glass)
+	gfx_rect_props(raw_data(reserve), off, dim, color, texc, texi, rounding, hardness, border, rounding_corners, oklab, glass)
 }
