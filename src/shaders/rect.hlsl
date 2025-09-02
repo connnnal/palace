@@ -308,7 +308,7 @@ float4 ps_main(InputPs input) : SV_Target
 #endif
 
 #ifdef SPEC_TEXTURE
-	if (texi != 0xFFFFFFFF) {
+	UBER_IF(texi != 0xFFFFFFFF) {
 	    Texture2D texture = ResourceDescriptorHeap[NonUniformResourceIndex(texi)];
 	    color *= texture.Sample(sampler_wrap_point, input.tex);
 	}

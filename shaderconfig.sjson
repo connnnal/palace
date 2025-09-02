@@ -24,8 +24,8 @@ shaders = [
 			{
 				name = "TEXTURE"
 				tweaks = [
-					{ name = "YES", defines = ["SPEC_TEXTURE"] }
 					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_TEXTURE"] }
 				]
 			}
 			{
@@ -71,8 +71,8 @@ shaders = [
 			{
 				name = "TEXTURE"
 				tweaks = [
-					{ name = "YES", defines = ["SPEC_TEXTURE"] }
 					{ name = "NO" }
+					{ name = "YES", defines = ["SPEC_TEXTURE"] }
 				]
 			}
 			{
