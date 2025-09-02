@@ -223,19 +223,17 @@ gfx_pipeline_expect :: proc(caps: Gfx_Rect_Caps) -> ^d3d12.IPipelineState {
 gfx_pipeline_wait :: proc(caps: Gfx_Rect_Caps) {
 	pack := &gfx_state.pipelines[transmute(u8)caps]
 
-	for {
+	loop: for {
 		value := sync.atomic_load_explicit(&pack.phase, .Relaxed)
 
 		switch Gfx_Pipeline_Phase(value) {
 		case .Unwanted:
 			log.panicf("can't wait on unsignalled pipeline (caps: %#v)", caps)
 		case .Signalled:
-			continue
+			sync.futex_wait(&pack.phase, u32(value))
 		case .Ready:
-			return
+			break loop
 		}
-
-		sync.futex_wait(&pack.phase, u32(value))
 	}
 }
 
@@ -1008,6 +1006,10 @@ gfx_rect_caps_specs :: proc(caps: Gfx_Rect_Caps) -> (vs: shaders.Rect_Vs_Spec, p
 	}
 	if .Glass in caps {
 		ps.glass = .Yes
+	}
+	if caps == GFX_RECT_CAPS_UBER {
+		vs.uber = .Potential
+		ps.uber = .Potential
 	}
 	return
 }

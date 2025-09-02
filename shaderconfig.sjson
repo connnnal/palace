@@ -49,6 +49,13 @@ shaders = [
 					{ name = "YES", defines = ["SPEC_OKLAB"] }
 				]
 			}
+			{
+				name = "UBER"
+				tweaks = [
+					{ name = "GUARANTEED", comment = "Interpret feature flags as guaranteed usage" }
+					{ name = "POTENTIAL", defines = ["SPEC_UBER"], comment = "Interpret feature flags as potential usage" }
+				]
+			}
 		]
 	}
 	{
@@ -94,6 +101,13 @@ shaders = [
 				tweaks = [
 					{ name = "NO" }
 					{ name = "YES", defines = ["SPEC_OKLAB"] }
+				]
+			}
+			{
+				name = "UBER"
+				tweaks = [
+					{ name = "GUARANTEED", comment = "Interpret feature flags as guaranteed usage" }
+					{ name = "POTENTIAL", defines = ["SPEC_UBER"], comment = "Interpret feature flags as potential usage" }
 				]
 			}
 		]

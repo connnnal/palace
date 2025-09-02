@@ -61,17 +61,17 @@ license:
 */
 float3 oklab2rgb(float3 oklab) {
 	static const float3x3 OKLAB2RGB_A = float3x3(
-	    1.0,           1.0,           1.0,
-	    0.3963377774, -0.1055613458, -0.0894841775,
-	    0.2158037573, -0.0638541728, -1.2914855480);
+		1.0,           1.0,           1.0,
+		0.3963377774, -0.1055613458, -0.0894841775,
+		0.2158037573, -0.0638541728, -1.2914855480);
 
 	static const float3x3 OKLAB2RGB_B = float3x3(
-	    4.0767416621, -1.2684380046, -0.0041960863,
-	    -3.3077115913, 2.6097574011, -0.7034186147,
-	    0.2309699292, -0.3413193965, 1.7076147010);
+		4.0767416621, -1.2684380046, -0.0041960863,
+		-3.3077115913, 2.6097574011, -0.7034186147,
+		0.2309699292, -0.3413193965, 1.7076147010);
 
-    float3 lms = mul(OKLAB2RGB_A, oklab);
-    return mul(OKLAB2RGB_B, (lms * lms * lms));
+	float3 lms = mul(OKLAB2RGB_A, oklab);
+	return mul(OKLAB2RGB_B, (lms * lms * lms));
 }
 /*
 contributors: Bjorn Ottosson (@bjornornorn)
@@ -83,18 +83,28 @@ license:
 */
 float3 rgb2oklab(float3 rgb) {
 	static const float3x3 RGB2OKLAB_A = float3x3(
-	    0.2104542553, 1.9779984951, 0.0259040371,
-	    0.7936177850, -2.4285922050, 0.7827717662,
-	    -0.0040720468, 0.4505937099, -0.8086757660);
+		0.2104542553, 1.9779984951, 0.0259040371,
+		0.7936177850, -2.4285922050, 0.7827717662,
+		-0.0040720468, 0.4505937099, -0.8086757660);
 
 	static const float3x3 RGB2OKLAB_B = float3x3(
-	    0.4122214708, 0.2119034982, 0.0883024619,
-	    0.5363325363, 0.6806995451, 0.2817188376,
-	    0.0514459929, 0.1073969566, 0.6299787005);
+		0.4122214708, 0.2119034982, 0.0883024619,
+		0.5363325363, 0.6806995451, 0.2817188376,
+		0.0514459929, 0.1073969566, 0.6299787005);
 
-    float3 lms = mul(RGB2OKLAB_B, rgb);
-    return mul(RGB2OKLAB_A, sign(lms) * pow(abs(lms), float3(0.3333333333333, 0.3333333333333, 0.3333333333333)));
+	float3 lms = mul(RGB2OKLAB_B, rgb);
+	return mul(RGB2OKLAB_A, sign(lms) * pow(abs(lms), float3(0.3333333333333, 0.3333333333333, 0.3333333333333)));
 }
+
+// We're using an ubershader model.
+// In the "uber" state, we consider options as enabling functionality, but not necessarily using it.
+// In a "specialisation" state, we consider options used exactly as described.
+// This allows us to eliminate branches as we compile more PSOs.
+#ifdef SPEC_UBER
+	#define UBER_IF(cond) if ( cond )
+#else
+	#define UBER_IF(cond) if ( true )
+#endif
 
 InputPs vs_main(InputVs input)
 {
@@ -130,7 +140,7 @@ InputPs vs_main(InputVs input)
 	color += (input.id == 3 ? input.color[3] : 0.0f);
 	color.xyz *= color.a;
 #ifdef SPEC_OKLAB
-	if (pack_oklab(input.pack)) {
+	UBER_IF(pack_oklab(input.pack)) {
 		// We inherit the alpha pre-multiply from above into this conversion.
 		// I'm uncertain if we'll lose "precision" in Oklab space?
 		// Regardless, this avoids a multiply in the pixel shader.
@@ -292,7 +302,7 @@ float4 ps_main(InputPs input) : SV_Target
 	bool glass = pack_glass(input.pack);
 
 #ifdef SPEC_OKLAB
-	if (oklab) {
+	UBER_IF(oklab) {
 		color.xyz = oklab2rgb(color.xyz);
 	}
 #endif
@@ -308,7 +318,7 @@ float4 ps_main(InputPs input) : SV_Target
 	float dist = sdRoundBox((input.shape_uv*2-1)*input.shape_size, input.shape_size, corner, 1);
 
 	#ifdef SPEC_BORDER
-		if (border > 0) {
+		UBER_IF(border > 0) {
 			// TODO: This math for nesting corner radii feels optically incorrect.
 			float dist_inner = sdRoundBox((input.shape_uv * 2 - 1) * input.shape_size, input.shape_size - 2 * border, max(0, corner - border * 2), 1);
 			dist = max(dist, -dist_inner);
@@ -335,7 +345,7 @@ float4 ps_main(InputPs input) : SV_Target
 #endif
 
 #ifdef SPEC_GLASS
-	if (glass) {
+	UBER_IF(glass) {
 		float2 input_pos_frac = input.pos.xy * draw_constants.viewport_inv;
 
 		Texture2D texture_prev = ResourceDescriptorHeap[draw_constants.accum_idx];
