@@ -65,13 +65,14 @@ text_init :: proc "contextless" () {
 		// TODO: Tie this to some IUnknown to avoid memcpy.
 		path := strings.join({`.\..\..\Downloads\Epilogue_Complete\Fonts\OTF\Epilogue-`, v, ".otf"}, "", context.temp_allocator)
 		data := os2.read_entire_file_from_path(path, context.temp_allocator) or_continue
-		hr = text_state.loader->CreateInMemoryFontFileReference(text_state.factory, raw_data(data), auto_cast len(data), nil, &font)
+		hr = text_state.loader->CreateInMemoryFontFileReference(text_state.factory, raw_data(data), cast(u32)len(data), nil, &font)
 		check(hr, "failed to load font from memory")
 		defer font->Release()
 
 		reference: ^d2w.IDWriteFontFaceReference
 		hr = text_state.factory->CreateFontFaceReference(font, 0, .NONE, &reference)
 		check(hr, "failed to create font face reference")
+		defer reference->Release()
 
 		hr = builder->AddFontFaceReference1(reference)
 		check(hr, "failed to create font face reference")
@@ -88,6 +89,7 @@ text_init :: proc "contextless" () {
 
 @(fini)
 text_shutdown :: proc "contextless" () {
+	text_state.factory->UnregisterFontFileLoader(text_state.loader)
 	text_state.loader->Release()
 	text_state.factory->Release()
 	text_state.collection->Release()

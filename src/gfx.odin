@@ -180,6 +180,8 @@ gfx_fini :: proc "contextless" () {
 	chan.close(gfx_state.pipeline_chan)
 	thread.destroy(gfx_state.pipeline_thread)
 
+	gfx_ffx_fini()
+
 	gfx_descriptor_fini()
 
 	gfx_state.adapter->Release()
@@ -188,8 +190,6 @@ gfx_fini :: proc "contextless" () {
 	gfx_state.dxgi_factory->Release()
 	gfx_state.root_sig->Release()
 	gfx_state.halt_fence->Release()
-
-	gfx_ffx_fini()
 }
 
 @(private)
@@ -239,6 +239,8 @@ gfx_pipeline_wait :: proc(caps: Gfx_Rect_Caps) {
 
 @(private)
 gfx_pipeline_runner :: proc() {
+	win.SetThreadDescription(win.GetCurrentThread(), "Gfx Pipeline Runner")
+
 	defer runtime.default_temp_allocator_destroy(&runtime.global_default_temp_allocator_data)
 	for caps in chan.recv(gfx_state.pipeline_chan) {
 		pack := &gfx_state.pipelines[transmute(u8)caps]
@@ -246,6 +248,11 @@ gfx_pipeline_runner :: proc() {
 		// It's possible a client asks for a pipeline that's already been created.
 		// That's fine.
 		(pack.state == nil) or_continue
+
+		runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
+		pack_name := fmt.tprintf("Graphics Pipeline State (%v)", caps)
+		superluminal.InstrumentationScope("Gfx Pipeline Bake", data = pack_name, color = GFX_COLOR)
 
 		is_opaque := .Translucent not_in caps
 		vs, ps := gfx_rect_caps_specs(caps)
@@ -312,8 +319,7 @@ gfx_pipeline_runner :: proc() {
 			hr := gfx_state.device->CreateGraphicsPipelineState(&desc, d3d12.IPipelineState_UUID, (^rawptr)(&pack.state))
 			checkf(hr, "failed to create graphics pipeline (caps: %#v)", caps)
 
-			runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
-			pack.state->SetName(win.utf8_to_wstring(fmt.tprintf("Graphics Pipeline State (%v)", caps)))
+			pack.state->SetName(win.utf8_to_wstring(pack_name))
 		}
 
 		sync.atomic_store_explicit(&pack.phase, sync.Futex(Gfx_Pipeline_Phase.Ready), .Release)
@@ -707,6 +713,8 @@ gfx_detach :: proc(a: ^Gfx_Attach, allocator := context.allocator) {
 }
 
 gfx_render :: proc(a: ^Gfx_Attach) {
+	superluminal.InstrumentationScope("Gfx Render", color = GFX_COLOR)
+
 	// TODO: We can skip rendering when our framebuffer is zero-sized, but we MUST always present.
 	hr: win.HRESULT
 

@@ -17,7 +17,8 @@ import "vendor:directx/d3d12"
 
 GLYPH_TEX_LENGTH :: 1024
 GLYPH_UPLOAD_SIZE :: mem.Megabyte // Per backbuffer.
-GLYPH_X_SLOPS :: 4
+GLYPH_X_SLOPS :: 6
+GLYPH_Y_SLOPS :: 2
 GLYPH_COLOR := superluminal.MAKE_COLOR(255, 150, 0)
 
 // They're probably slow to create, consider creating at startup before they're required.
@@ -39,10 +40,10 @@ Glyph_Page :: struct #no_copy {
 Glyph_Key :: struct {
 	// This ptr must be consistent.
 	// We rely on DWrite de-duplicating the returned FontFace object.
-	face:    ^d2w.IDWriteFontFace3,
-	size:    f32,
-	index:   u16,
-	x_shift: u16,
+	face:  ^d2w.IDWriteFontFace3,
+	size:  f32,
+	index: u16,
+	shift: [2]u8,
 }
 
 Glyph_Run_Draw :: struct {
@@ -240,7 +241,7 @@ glyph_pass_cook :: proc(cmd_list: ^d3d12.IGraphicsCommandList, #any_int buffer_i
 			fontEmSize   = key.size,
 			glyphCount   = 1,
 			glyphIndices = &index,
-			glyphOffsets = &{f32(key.x_shift) / GLYPH_X_SLOPS, 0},
+			glyphOffsets = &{f32(key.shift.x) / GLYPH_X_SLOPS, f32(key.shift.y) / GLYPH_Y_SLOPS},
 		}
 
 		transform := DWRITE_IDENTITY
@@ -478,18 +479,28 @@ glyph_renderer_vtable: d2w.IDWriteTextRenderer_VTable = {
 			index, offset, advance := expand_values(pack)
 			defer sum_advance += advance
 
-			base, frac := math.modf(baselineOriginX + sum_advance + offset.advanceOffset)
-			shift_x := u16(0.5 + frac * GLYPH_X_SLOPS)
+			shift: [2]u8
+			base: [2]f32
+			{
+				frac: f32
+				base.x, frac = math.modf(baselineOriginX + sum_advance + offset.advanceOffset)
+				shift.x = u8(0.5 + frac * GLYPH_X_SLOPS)
+			}
+			{
+				frac: f32
+				base.y, frac = math.modf(baselineOriginY - offset.ascenderOffset)
+				shift.y = u8(0.5 + frac * GLYPH_Y_SLOPS)
+			}
 
 			key := Glyph_Key {
-				face    = face3,
-				index   = index,
-				size    = glyphRun.fontEmSize,
-				x_shift = shift_x,
+				face  = face3,
+				index = index,
+				size  = glyphRun.fontEmSize,
+				shift = shift,
 			}
 
 			_, value_ptr, just_inserted := map_entry(&glyph_state.discovery, key) or_else log.panicf("out of map memory on %q", key)
-			defer pending.rects[i] = {value_ptr^, {base, baselineOriginY + offset.ascenderOffset}}
+			defer pending.rects[i] = {value_ptr^, base}
 
 			if just_inserted {
 				face3->AddRef()

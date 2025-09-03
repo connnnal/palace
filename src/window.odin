@@ -261,7 +261,7 @@ wind_init :: proc "contextless" () {
 		hCursor       = win.LoadCursorA(nil, win.IDC_ARROW),
 		hbrBackground = wind_state.bg,
 		lpszMenuName  = nil,
-		lpszClassName = win.L(CLASS_NAME),
+		lpszClassName = CLASS_NAME,
 		hIconSm       = nil,
 	}
 	class := win.RegisterClassExW(&wc)
@@ -287,8 +287,8 @@ wind_open :: proc(w: ^Window) -> (ok: bool) {
 
 	w.wnd = win.CreateWindowExW(
 		win.WS_EX_ACCEPTFILES,
-		win.L(CLASS_NAME),
-		win.L("Hello world! :^)"),
+		CLASS_NAME,
+		"Hello world! :^)",
 		WINDOW_STYLE,
 		win.CW_USEDEFAULT,
 		win.CW_USEDEFAULT,

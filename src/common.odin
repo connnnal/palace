@@ -13,7 +13,7 @@ check :: proc(hr: win.HRESULT, message: string, loc := #caller_location) {
 }
 
 checkf :: proc(hr: win.HRESULT, fmt_str: string, args: ..any, loc := #caller_location) {
-	log.assertf(win.SUCCEEDED(hr), fmt_str, ..args, loc = loc)
+	log.assertf(win.SUCCEEDED(hr), fmt_str, args = args, loc = loc)
 }
 
 @(private)
