@@ -8,11 +8,11 @@ import win "core:sys/windows"
 import "vendor:directx/dxc"
 
 Include_Handler :: struct {
-	using iincludehandler: dxc.IIncludeHandler,
+	using #subtype iincludehandler: dxc.IIncludeHandler,
 	ctx:                   runtime.Context,
 	allocator:             runtime.Allocator,
 	utils:                 ^dxc.IUtils,
-	referenced:            map[string]struct{},
+	referenced:            [dynamic]string,
 }
 
 include_handler_make :: proc(utils: ^dxc.IUtils, ctx := context, allocator := context.temp_allocator) -> Include_Handler {
@@ -34,9 +34,9 @@ include_handler_destroy :: proc(this: Include_Handler) {
 }
 
 include_handler_deps :: proc(this: Include_Handler, allocator := context.temp_allocator) -> []string {
-	keys := slice.map_keys(this.referenced, allocator) or_else log.panic("failed to allocate map keys")
-	for &v in keys {
-		v = strings.clone(v, allocator)
+	keys := make([]string, len(this.referenced), allocator) or_else log.panic("failed to allocate map keys")
+	#no_bounds_check for &v, i in keys {
+		v = strings.clone(this.referenced[i], allocator)
 	}
 	return keys
 }
@@ -77,11 +77,8 @@ include_handler_vtable: dxc.IIncludeHandler_VTable = {
 			ret := win.GetFullPathNameW(pFilename, required, cast(win.LPCWSTR)raw_data(buf), nil)
 			(ret > 0) or_break seen_check
 
-			err: runtime.Allocator_Error
-			filename, err = win.utf16_to_utf8_alloc(buf[:required - 1], context.temp_allocator)
-			(err == nil) or_break seen_check
-
-			_, seen_before = this.referenced[filename]
+			filename = win.utf16_to_utf8_alloc(buf[:required - 1], context.temp_allocator) or_break seen_check
+			seen_before = slice.contains(this.referenced[:], filename)
 		}
 
 		hr: win.HRESULT
@@ -96,7 +93,7 @@ include_handler_vtable: dxc.IIncludeHandler_VTable = {
 
 		if !seen_before && win.SUCCEEDED(hr) {
 			// Need to key string for permanent reference.
-			this.referenced[strings.clone(filename, this.allocator)] = {}
+			append(&this.referenced, strings.clone(filename, this.allocator))
 		}
 
 		return hr

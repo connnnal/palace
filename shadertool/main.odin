@@ -23,6 +23,14 @@ import tp "lib:threadpool"
 
 import "vendor:directx/dxc"
 
+FILE_BLOB :: "shaders.bin"
+FILE_MANIFEST :: "shaders.odin"
+FILE_HASH :: ".shader_log"
+FILE_CONFIG :: "shaderconfig.sjson"
+
+META_INLINE_LANE_TYPES :: true
+META_WIDE_INTERVALS :: false
+
 Compile_Work_Params :: struct {
 	// Input.
 	args:         ^dxc.ICompilerArgs,
@@ -45,14 +53,15 @@ work_queue: struct {
 @(init)
 work_init :: proc "contextless" () {
 	context = default_context()
-	// This allocator describes work to be done.
+
+	// This allocator contains work input/output.
 	if err := virtual.arena_init_growing(&work_queue.arena); err != nil {
 		log.panicf("failed to init arena %q", err)
 	}
 	work_queue.allocator = virtual.arena_allocator(&work_queue.arena)
 
-	// Left to its own devices, the threadpool library will spam threads and create tons of contention.
-	// We must enforce thread min/maxes.
+	// Left to its own devices, the threadpool will spam threads and create tons of contention.
+	// We must set min/maxes.
 	work_queue.pool = tp.CreateThreadpool(nil)
 	{
 		// Don't try to occupy all cores.
@@ -105,13 +114,10 @@ work_enqueue :: proc(params: ^Compile_Work_Params) {
 
 	// TODO: Creating work per task may be expensive; we can re-use work if we move the queue into our app.
 	work_callback_wrapper :: proc "system" (instance: tp.PTP_CALLBACK_INSTANCE, parameter: win.PVOID, work: tp.PTP_WORK) {
-		context = default_context()
+		work_callback(cast(^Compile_Work_Params)parameter)
 
-		parameter := cast(^Compile_Work_Params)parameter
-		work_callback(parameter)
-
-		count := sync.atomic_sub_explicit(&work_queue.pending, 1, .Relaxed)
-		if count - 1 <= 0 {
+		// If we're the last task to finish, signal the waiter.
+		if sync.atomic_sub_explicit(&work_queue.pending, 1, .Relaxed) <= 1 {
 			sync.futex_signal(&work_queue.pending)
 		}
 	}
@@ -120,8 +126,11 @@ work_enqueue :: proc(params: ^Compile_Work_Params) {
 }
 
 // This runs on the threadpool!
-work_callback :: proc(params: ^Compile_Work_Params) {
+work_callback :: proc "contextless" (params: ^Compile_Work_Params) {
 	superluminal.InstrumentationScope("Compilation Callback", data = params.shader_name, color = superluminal.MAKE_COLOR(255, 100, 0))
+
+	context = default_context()
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 
 	start := time.tick_now()
 	defer {
@@ -134,27 +143,24 @@ work_callback :: proc(params: ^Compile_Work_Params) {
 		}
 	}
 
-	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
-	context.allocator = context.temp_allocator
-
 	// TODO: Handle failing to read source file.
 	shader_name := params.shader_name
 	shader_source, _ := os2.read_entire_file(params.shader_path, context.temp_allocator)
 
 	hr: win.HRESULT
 
-	utils: ^dxc.IUtils
-	hr = dxc.CreateInstance(dxc.Utils_CLSID, dxc.IUtils_UUID, (^rawptr)(&utils))
-	log.assert(win.SUCCEEDED(hr), "failed to create IDxcUtils")
-	defer utils->Release()
-
 	// "...all of the objects we provide aren't thread-safe. They're also not re-entrant except for AddRef/Release".
-	// "...creating compiler instances is pretty cheap".
+	// "...creating compiler instances is pretty cheap, so it's probably not worth the hassle of caching / sharing them".
 	// https://github.com/Microsoft/DirectXShaderCompiler/issues/79.
 	compiler: ^dxc.ICompiler3
 	hr = dxc.CreateInstance(dxc.Compiler_CLSID, dxc.ICompiler3_UUID, (^rawptr)(&compiler))
 	log.assert(win.SUCCEEDED(hr), "failed to create IDxcCompiler3")
 	defer compiler->Release()
+
+	utils: ^dxc.IUtils
+	hr = dxc.CreateInstance(dxc.Utils_CLSID, dxc.IUtils_UUID, (^rawptr)(&utils))
+	log.assert(win.SUCCEEDED(hr), "failed to create IDxcUtils")
+	defer utils->Release()
 
 	include_handler := include_handler_make(utils)
 	defer include_handler_destroy(include_handler)
@@ -176,31 +182,34 @@ work_callback :: proc(params: ^Compile_Work_Params) {
 	primary_output := result->PrimaryOutput()
 	log.assertf(primary_output == .OBJECT, "unexpected output type for %q, got %q", shader_name, primary_output)
 
-	out_remarks: if result->HasOutput(.REMARKS) {
-		out: ^dxc.IBlobUtf8
-		hr = result->GetOutput(.REMARKS, dxc.IBlobUtf8_UUID, &out, nil)
-		win.SUCCEEDED(hr) or_break out_remarks
-		defer out->Release()
+	// TODO: Upstream doesn't have these yet! https://github.com/odin-lang/Odin/pull/5591.
+	when false {
+		out_remarks: if result->HasOutput(.REMARKS) {
+			out: ^dxc.IBlobUtf8
+			hr = result->GetOutput(.REMARKS, dxc.IBlobUtf8_UUID, &out, nil)
+			win.SUCCEEDED(hr) or_break out_remarks
+			defer out->Release()
 
-		out_slice := ([^]u8)(out->GetStringPointer())[:out->GetStringLength()]
-		(len(out_slice) > 0) or_break out_remarks
-		log.warnf("%q remarks: %s", shader_name, out_slice)
-	}
+			out_slice := ([^]u8)(out->GetStringPointer())[:out->GetStringLength()]
+			(len(out_slice) > 0) or_break out_remarks
+			log.warnf("%q remarks: %s", shader_name, out_slice)
+		}
 
-	out_timing: if result->HasOutput(.TIME_REPORT) {
-		out_blob: ^dxc.IBlob
-		hr = result->GetOutput(.TIME_REPORT, dxc.IBlob_UUID, &out_blob, nil)
-		win.SUCCEEDED(hr) or_break out_timing
-		defer out_blob->Release()
+		out_timing: if result->HasOutput(.TIME_REPORT) {
+			out_blob: ^dxc.IBlob
+			hr = result->GetOutput(.TIME_REPORT, dxc.IBlob_UUID, &out_blob, nil)
+			win.SUCCEEDED(hr) or_break out_timing
+			defer out_blob->Release()
 
-		out_utf8: ^dxc.IBlobUtf8
-		hr = utils->GetBlobAsUtf8(out_blob, &out_utf8)
-		win.SUCCEEDED(hr) or_break out_timing
-		defer out_utf8->Release()
+			out_utf8: ^dxc.IBlobUtf8
+			hr = utils->GetBlobAsUtf8(out_blob, &out_utf8)
+			win.SUCCEEDED(hr) or_break out_timing
+			defer out_utf8->Release()
 
-		out_slice := ([^]u8)(out_utf8->GetStringPointer())[:out_utf8->GetStringLength()]
-		(len(out_slice) > 0) or_break out_timing
-		log.warnf("%q time report: %s", shader_name, out_slice)
+			out_slice := ([^]u8)(out_utf8->GetStringPointer())[:out_utf8->GetStringLength()]
+			(len(out_slice) > 0) or_break out_timing
+			log.warnf("%q time report: %s", shader_name, out_slice)
+		}
 	}
 
 	status: win.HRESULT
@@ -271,7 +280,7 @@ main_ :: proc() -> Error {
 	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 	hr: win.HRESULT
 
-	config := config_load(context.temp_allocator) or_return
+	config := config_load(FILE_CONFIG) or_return
 
 	if err := os2.make_directory_all(config.out_dir); err != nil {
 		log.errorf("failed to ensure output path %q", config.out_dir)
@@ -290,25 +299,24 @@ main_ :: proc() -> Error {
 			[]byte,
 		},
 	}
-	out_combos := make([dynamic]Shader_Computation_Combo, context.allocator)
+	out_combos: [dynamic]Shader_Computation_Combo
 	defer delete(out_combos)
 
 	Shader_Computation :: struct {
-		using shader:       Shader,
-		out_start, out_end: int,
+		using shader:           Shader,
+		combo_start, combo_end: int,
 	}
-	out_shaders := make([dynamic]Shader_Computation, context.allocator)
+	out_shaders: [dynamic]Shader_Computation
 	defer delete(out_shaders)
 
 	for shader in config.shaders {
-		context.allocator = context.temp_allocator
 		runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 
 		out_shader: Shader_Computation
 		out_shader.shader = shader
-		out_shader.out_start = len(out_combos)
+		out_shader.combo_start = len(out_combos)
 		defer append(&out_shaders, out_shader)
-		defer out_shader.out_end = len(out_combos)
+		defer out_shader.combo_end = len(out_combos)
 
 		// Compile against all combinations of the feature flag set.
 		// Note that this includes empty.
@@ -345,7 +353,7 @@ main_ :: proc() -> Error {
 
 			// Extend the source file's hash for this specific target.
 			state: xxhash.XXH64_state
-			xxhash.XXH64_reset_state(&state, seed = 0)
+			xxhash.XXH64_reset_state(&state)
 			xxhash.XXH64_update(&state, transmute([]byte)shader.name)
 			maybe_hash_into(&state, shader_entry)
 			maybe_hash_into(&state, shader_source)
@@ -357,18 +365,18 @@ main_ :: proc() -> Error {
 			}
 			hash := xxhash.XXH64_digest(&state)
 
-			prev_output, prev_exists, prev_deps_ok := d2_check(hash)
-			needs_recompilation := !prev_exists || !prev_deps_ok
+			prev_output, prev_ok := d2_check(hash)
 
 			out_combo: Shader_Computation_Combo
 			out_combo.hash = hash
 			out_combo.inner = prev_output
 			defer append(&out_combos, out_combo)
 
-			(needs_recompilation) or_continue
+			(!prev_ok) or_continue
 
 			// Collect all defines from this tweak combination.
 			defines: [dynamic]dxc.Define
+			defines.allocator = context.temp_allocator
 			for tweak in combo {
 				inner_defines := kv_opts_into_dxc_defines(tweak.defines)
 				append(&defines, ..inner_defines)
@@ -376,6 +384,7 @@ main_ :: proc() -> Error {
 
 			// Collect all compiler arguments from this tweak combination.
 			arguments: [dynamic]win.wstring
+			arguments.allocator = context.temp_allocator
 			// append(&arguments, "-Qstrip_debug")
 			// append(&arguments, "-Qstrip_reflect")
 			// append(&arguments, "-Qstrip_priv")
@@ -388,8 +397,7 @@ main_ :: proc() -> Error {
 				append(&arguments, ..inner_arguments)
 			}
 			for dir in shader.include {
-				append(&arguments, "-I")
-				append(&arguments, win.utf8_to_wstring(dir))
+				append(&arguments, "-I", win.utf8_to_wstring(dir))
 			}
 
 			args: ^dxc.ICompilerArgs
@@ -399,9 +407,9 @@ main_ :: proc() -> Error {
 				win.utf8_to_wstring(shader_entry.?),
 				win.utf8_to_wstring(shader_profile_name),
 				raw_data(arguments),
-				auto_cast len(arguments),
+				cast(u32)len(arguments),
 				raw_data(defines),
-				auto_cast len(defines),
+				cast(u32)len(defines),
 				&args,
 			)
 			log.assertf(win.SUCCEEDED(hr), "failed to build arguments for %q", shader.name)
@@ -415,7 +423,6 @@ main_ :: proc() -> Error {
 			// Output some debug info.
 			debug_str: strings.Builder
 			strings.builder_init(&debug_str, context.temp_allocator)
-			// defer log.debugf("compiling %s:\n%s", shader.name, strings.to_string(debug_str))
 			{
 				// Tweaks.
 				fmt.sbprint(&debug_str, "\ttweak: ")
@@ -435,6 +442,7 @@ main_ :: proc() -> Error {
 				all_c := strings.join(all_str, ", ", context.temp_allocator)
 				fmt.sbprintf(&debug_str, "\targs: %v", all_c)
 			}
+			log.debugf("permute %s:\n%s", shader.name, strings.to_string(debug_str))
 		}
 	}
 
@@ -452,11 +460,8 @@ main_ :: proc() -> Error {
 			all_ok &&= inner.ok
 			if inner.ok {
 				// Need to add the actual source file as a dependency, too.
-				// For the purposes of our build system we needn't separate "peers" from inputs.
-				dependencies :=
-					slice.concatenate([][]string{inner.dependencies, {inner.shader_path}}, context.temp_allocator) or_else log.panic(
-						"failed to concatenate dependencies",
-					)
+				// For the purposes of our caching we needn't separate "peers" from "inputs".
+				dependencies := slice.concatenate([][]string{inner.dependencies, {inner.shader_path}}, context.temp_allocator)
 				d2_record(combo.hash, dependencies, inner.code)
 			}
 		case []byte:
@@ -471,15 +476,12 @@ main_ :: proc() -> Error {
 
 	// Concatenate into our output.
 	{
-		FILE_BLOB :: "shaders.bin"
-		FILE_MANIFEST :: "shaders.odin"
+		b := strings.builder_make(context.temp_allocator)
+		defer strings.builder_destroy(&b)
 
-		b: strings.Builder
-		strings.builder_init(&b, context.allocator)
 		strings.write_string(&b, "package shader_meta")
 		strings.write_string(&b, "\n\nimport \"vendor:directx/d3d12\"")
 		strings.write_string(&b, "\n\n@(private) SOURCE_BLOB := #load(\"" + FILE_BLOB + "\")\n")
-		defer strings.builder_destroy(&b)
 
 		out_bytes := 0
 		for combo in out_combos {
@@ -491,20 +493,17 @@ main_ :: proc() -> Error {
 			}
 		}
 
-		buf := make([]byte, out_bytes, context.allocator)
+		buf := make([]byte, out_bytes, context.temp_allocator)
 		defer delete(buf)
 
 		out_offset := 0
 
 		for shader in out_shaders {
-			combos := out_combos[shader.out_start:shader.out_end]
+			combos := out_combos[shader.combo_start:shader.combo_end]
 
 			strings.write_string(&b, "\n")
 
-			SHADER_INLINE_LANE_TYPES :: true
-			SHADER_WIDE_INTERVALS :: false
-
-			when SHADER_INLINE_LANE_TYPES {
+			when META_INLINE_LANE_TYPES {
 				fmt.sbprintfln(&b, "%s_Spec :: struct {{", strings.to_ada_case(shader.name))
 				{
 					for lane in shader.lanes {
@@ -579,7 +578,7 @@ main_ :: proc() -> Error {
 
 			fmt.sbprintfln(&b, "%s :: proc(spec: %s_Spec) -> d3d12.SHADER_BYTECODE {{", strings.to_snake_case(shader.name), strings.to_ada_case(shader.name))
 			fmt.sbprintfln(&b, "\tidx := cast(int)%s_key(spec)", strings.to_snake_case(shader.name))
-			when SHADER_WIDE_INTERVALS {
+			when META_WIDE_INTERVALS {
 				fmt.sbprintln(&b, "\t@(static, rodata) inner := [?][2]int{")
 				for combo in combos {
 					combo_len := 0
@@ -617,24 +616,13 @@ main_ :: proc() -> Error {
 			fmt.sbprintln(&b, "}")
 		}
 
-		if out_path, err := os2.join_path({config.out_dir, FILE_MANIFEST}, context.temp_allocator); err != nil {
-			log.errorf("failed to join output path %q", config.out_dir)
-			return err
-		} else {
-			if err := os2.write_entire_file(out_path, b.buf[:]); err != nil {
-				log.error("failed to write shader meta file")
-				return err
-			}
+		{
+			out_path := os2.join_path({config.out_dir, FILE_MANIFEST}, context.temp_allocator) or_return
+			os2.write_entire_file(out_path, b.buf[:]) or_return
 		}
-
-		if out_path, err := os2.join_path({config.out_dir, FILE_BLOB}, context.temp_allocator); err != nil {
-			log.errorf("failed to join output path %q", config.out_dir)
-			return err
-		} else {
-			if err := os2.write_entire_file(out_path, buf); err != nil {
-				log.error("failed to write shader meta file")
-				return err
-			}
+		{
+			out_path := os2.join_path({config.out_dir, FILE_BLOB}, context.temp_allocator) or_return
+			os2.write_entire_file(out_path, buf[:]) or_return
 		}
 	}
 

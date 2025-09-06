@@ -89,7 +89,6 @@ kv_opts_into_dxc_args :: proc(opts: Kv_Opts, allocator := context.temp_allocator
 		for k, v in inner {
 			defer i += 2
 			log.ensuref(strings.starts_with(k, "-"), "bad arg key %q", k)
-			log.ensuref(!strings.starts_with(v, "-"), "bad arg value %q", v)
 			out[i + 0] = win.utf8_to_wstring(k, allocator)
 			out[i + 1] = win.utf8_to_wstring(v, allocator)
 		}
@@ -97,22 +96,22 @@ kv_opts_into_dxc_args :: proc(opts: Kv_Opts, allocator := context.temp_allocator
 	return out
 }
 
-kv_opts_into_dxc_defines :: proc(opts: Kv_Opts, key_prefix := "", allocator := context.temp_allocator) -> (out: []dxc.Define) {
-	#no_bounds_check switch inner in opts {
+kv_opts_into_dxc_defines :: proc(opts: Kv_Opts, allocator := context.temp_allocator) -> (out: []dxc.Define) {
+	switch inner in opts {
 	case []string:
 		count := len(inner)
 		out = make([]dxc.Define, count, allocator)
-		for v, i in inner {
-			out[i].Name = win.utf8_to_wstring(strings.concatenate({key_prefix, v}, context.temp_allocator), allocator)
+		for k, i in inner {
+			out[i].Name = win.utf8_to_wstring(k, allocator)
 		}
 	case map[string]string:
 		count := len(inner)
 		out = make([]dxc.Define, count, allocator)
 		i := 0
 		for k, v in inner {
-			defer i += 1
-			out[i].Name = win.utf8_to_wstring(strings.concatenate({key_prefix, k}, context.temp_allocator), allocator)
+			out[i].Name = win.utf8_to_wstring(k, allocator)
 			out[i].Value = win.utf8_to_wstring(v, allocator)
+			i += 1
 		}
 	}
 	return out
@@ -171,18 +170,16 @@ tweak_identifier :: proc(tweak: Tweak) -> string {
 	return tweak.name
 }
 
-config_load :: proc(allocator := context.temp_allocator) -> (Config, Error) {
-	CONFIG_NAME :: "shaderconfig.sjson"
-
-	config_source, read_err := os2.read_entire_file(CONFIG_NAME, allocator)
+config_load :: proc(filename: string, allocator := context.temp_allocator) -> (Config, Error) {
+	config_source, read_err := os2.read_entire_file(filename, allocator)
 	if read_err != nil {
-		log.errorf("failed to read %q: %v", CONFIG_NAME, read_err)
+		log.errorf("failed to read %q: %v", filename, read_err)
 		return {}, read_err
 	}
 
 	config: Config
 	if err := json.unmarshal(config_source, &config, .SJSON, allocator); err != nil {
-		log.errorf("failed to unmarshal %q: %v", CONFIG_NAME, err)
+		log.errorf("failed to unmarshal %q: %v", filename, err)
 		return {}, .Bad_Config
 	}
 

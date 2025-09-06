@@ -46,10 +46,10 @@ Gfx_Pipeline_Phase :: enum {
 }
 
 gfx_state: struct {
+	factory:         ^dxgi.IFactory6,
 	adapter:         ^dxgi.IAdapter,
 	device:          ^d3d12.IDevice4,
 	queue:           ^d3d12.ICommandQueue,
-	dxgi_factory:    ^dxgi.IFactory6,
 	root_sig:        ^d3d12.IRootSignature,
 	// Device sync.
 	halt_fence:      ^d3d12.IFence,
@@ -91,7 +91,7 @@ gfx_init :: proc "contextless" () {
 		dxgi_factory_flags += {.DEBUG}
 	}
 
-	hr = dxgi.CreateDXGIFactory2(dxgi_factory_flags, dxgi.IFactory6_UUID, cast(^rawptr)&gfx_state.dxgi_factory)
+	hr = dxgi.CreateDXGIFactory2(dxgi_factory_flags, dxgi.IFactory6_UUID, cast(^rawptr)&gfx_state.factory)
 	check(hr, "failed to create dxgi factory")
 
 	find_adapter: {
@@ -100,7 +100,7 @@ gfx_init :: proc "contextless" () {
 		MIN_SHADERMODEL :: d3d12.SHADER_MODEL._6_6
 
 		_adapter: ^dxgi.IAdapter1
-		for idx: u32; gfx_state.dxgi_factory->EnumAdapterByGpuPreference(idx, .HIGH_PERFORMANCE, dxgi.IAdapter1_UUID, (^rawptr)(&_adapter)) == win.S_OK; idx += 1 {
+		for idx: u32; gfx_state.factory->EnumAdapterByGpuPreference(idx, .HIGH_PERFORMANCE, dxgi.IAdapter1_UUID, (^rawptr)(&_adapter)) == win.S_OK; idx += 1 {
 			desc: dxgi.ADAPTER_DESC1
 			_adapter->GetDesc1(&desc)
 			defer _adapter->Release()
@@ -168,6 +168,7 @@ gfx_init :: proc "contextless" () {
 	gfx_pipeline_query(GFX_RECT_CAPS_UBER)
 
 	gfx_descriptor_init()
+
 	gfx_ffx_init()
 }
 
@@ -187,7 +188,7 @@ gfx_fini :: proc "contextless" () {
 	gfx_state.adapter->Release()
 	gfx_state.device->Release()
 	gfx_state.queue->Release()
-	gfx_state.dxgi_factory->Release()
+	gfx_state.factory->Release()
 	gfx_state.root_sig->Release()
 	gfx_state.halt_fence->Release()
 }
@@ -474,7 +475,7 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 		}
 
 		_swapchain: ^dxgi.ISwapChain1
-		hr = gfx_state.dxgi_factory->CreateSwapChainForHwnd(gfx_state.queue, a.wnd, &desc, nil, nil, &_swapchain)
+		hr = gfx_state.factory->CreateSwapChainForHwnd(gfx_state.queue, a.wnd, &desc, nil, nil, &_swapchain)
 		check(hr, "failed to create swapchain")
 		defer _swapchain->Release()
 
@@ -485,7 +486,7 @@ gfx_swapchain_hydrate :: proc(a: ^Gfx_Attach, res: [2]i32, $initial: bool) -> (u
 		check(hr, "failed to set swapchain maximum frame latency")
 
 		// TODO: Better support; should use NO_TEARING to get variable refresh when fullscreen.
-		hr = gfx_state.dxgi_factory->MakeWindowAssociation(a.wnd, {.NO_ALT_ENTER})
+		hr = gfx_state.factory->MakeWindowAssociation(a.wnd, {.NO_ALT_ENTER})
 		check(hr, "failed to make window association")
 
 		a.swapchain_waitable = a.swapchain->GetFrameLatencyWaitableObject()

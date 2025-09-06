@@ -9,9 +9,6 @@ import "core:os/os2"
 import "core:slice"
 import "core:strings"
 
-// Similar naming convention to Ninja.
-HASH_FILE :: ".hash_log"
-
 Hash :: xxhash.XXH64_hash
 Path :: string
 
@@ -26,6 +23,7 @@ D2_Item :: struct {
 }
 
 D2_Sz :: struct {
+	// We could use this to invalidate outputs when the tool is recompiled.
 	exe_fingerprint: u64,
 	generation:      Generation,
 	items:           map[Hash]D2_Item,
@@ -49,9 +47,9 @@ d2_init :: proc "contextless" () {
 	context.allocator = d2_state.allocator
 
 	// The unmarshal impl borrows from its input, we can't use a temporary allocator.
-	contents, read_err := os2.read_entire_file(HASH_FILE, context.allocator)
+	contents, read_err := os2.read_entire_file(FILE_HASH, context.allocator)
 	if read_err != nil && read_err != .Not_Exist {
-		log.warnf("failed to read log %q", HASH_FILE)
+		log.warnf("failed to read log %q", FILE_HASH)
 	}
 
 	cbor_err := cbor.unmarshal(contents, &d2_state.sz, {.Trusted_Input})
@@ -63,7 +61,6 @@ d2_init :: proc "contextless" () {
 @(fini)
 d2_fini :: proc "contextless" () {
 	context = default_context()
-	defer virtual.arena_destroy(&d2_state.arena)
 
 	// Prune old entries.
 	// We could choose to use a grace period of multiple generations, as a sort of undo cache.
@@ -80,10 +77,12 @@ d2_fini :: proc "contextless" () {
 		log.error("failed to marshal log")
 	}
 
-	write_err := os2.write_entire_file(HASH_FILE, contents)
+	write_err := os2.write_entire_file(FILE_HASH, contents)
 	if write_err != nil {
-		log.errorf("failed to write log %q", HASH_FILE)
+		log.errorf("failed to write log %q", FILE_HASH)
 	}
+
+	virtual.arena_destroy(&d2_state.arena)
 }
 
 d2_record :: proc(hash: Hash, deps: []Path, output: []byte) {
@@ -111,19 +110,15 @@ d2_record :: proc(hash: Hash, deps: []Path, output: []byte) {
 	d2_state.items[hash] = item
 }
 
-d2_check :: proc(hash: Hash) -> (output: []byte, did_exist: bool, deps_ok: bool) {
-	item: D2_Item
-	item, did_exist = d2_state.items[hash]
+d2_check :: proc(hash: Hash) -> (output: []byte, exists_and_deps_ok: bool) {
+	item := d2_state.items[hash] or_return
 
 	state: xxhash.XXH64_state
 	for v in item.deps {
 		d2_hash_into(&state, v)
 	}
-	deps_ok = item.deps_hash == xxhash.XXH64_digest(&state)
 
-	output = item.output
-
-	return
+	return item.output, item.deps_hash == xxhash.XXH64_digest(&state)
 }
 
 d2_mark_relevant :: proc(hash: Hash) {
