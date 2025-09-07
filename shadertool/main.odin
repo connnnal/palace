@@ -86,14 +86,14 @@ work_fini :: proc "contextless" () {
 	tp.CloseThreadpool(work_queue.pool)
 }
 
-// Release task resources.
+// Release resources after tasks are complete.
 work_reset :: proc() {
 	log.assertf(sync.atomic_load_explicit(&work_queue.pending, .Acquire) == 0, "all work should be completed")
 	tp.CloseThreadpoolCleanupGroupMembers(work_queue.cleaup, win.FALSE, nil)
 	virtual.arena_free_all(&work_queue.arena)
 }
 
-// Wait for all tasks to finish.
+// Wait for queued tasks to finish.
 work_flush :: proc() {
 	for {
 		value := sync.atomic_load_explicit(&work_queue.pending, .Acquire)
@@ -117,8 +117,12 @@ work_enqueue :: proc(params: ^Compile_Work_Params) {
 		work_callback(cast(^Compile_Work_Params)parameter)
 
 		// If we're the last task to finish, signal the waiter.
-		if sync.atomic_sub_explicit(&work_queue.pending, 1, .Relaxed) <= 1 {
+		remaining := sync.atomic_sub_explicit(&work_queue.pending, 1, .Relaxed)
+		switch remaining {
+		case 1:
 			sync.futex_signal(&work_queue.pending)
+		case 0:
+			panic_contextless("job remaining underflow")
 		}
 	}
 	work := tp.CreateThreadpoolWork(work_callback_wrapper, params, &environ)
@@ -177,6 +181,9 @@ work_callback :: proc "contextless" (params: ^Compile_Work_Params) {
 	)
 	log.assertf(win.SUCCEEDED(hr), "failed to invoke compilation for %q", shader_name)
 	defer result->Release()
+
+	// Release arguments, as discussed below.
+	params.args->Release()
 
 	// `.NONE` could mean the shader profile is mismatched!
 	primary_output := result->PrimaryOutput()
@@ -249,6 +256,9 @@ work_callback :: proc "contextless" (params: ^Compile_Work_Params) {
 work_params_new :: proc(args: ^dxc.ICompilerArgs, shader_name: string, shader_path: string) -> ^Compile_Work_Params {
 	params := new(Compile_Work_Params, work_queue.allocator)
 
+	// The user-side work description is designed to be entirely freed when the allocator terminates.
+	// This vestigial COM object can be freed after compilation, without affecting output.
+	// This isn't unexpected behaviour as we aren't supposed to re-use work params.
 	args->AddRef()
 	params.args = args
 
@@ -256,13 +266,6 @@ work_params_new :: proc(args: ^dxc.ICompilerArgs, shader_name: string, shader_pa
 	params.shader_path = strings.clone(shader_path, work_queue.allocator)
 
 	return params
-}
-
-// Bounded by work_queue allocator.
-// Potentially a no-op.
-work_params_destroy :: proc(params: ^Compile_Work_Params) {
-	params.args->Release()
-	free(params, work_queue.allocator)
 }
 
 Shader_Error :: enum {
@@ -426,21 +429,24 @@ main_ :: proc() -> Error {
 			{
 				// Tweaks.
 				fmt.sbprint(&debug_str, "\ttweak: ")
-				for v, i in combo {
+				for pack, i in soa_zip(combo, shader.lanes) {
 					if i > 0 {
 						fmt.sbprint(&debug_str, ", ")
 					}
-					fmt.sbprintf(&debug_str, "%s=%s", shader.lanes[i].name, v.name)
+					fmt.sbprint(&debug_str, pack._0.name, pack._1.name, sep = "=")
 				}
 				fmt.sbprintln(&debug_str)
 
 				// Arguments
-				all := slice.from_ptr(args->GetArguments(), cast(int)args->GetCount())
-				all_str := slice.mapper(all, proc(arg: win.LPCWSTR) -> string {
-					return win.wstring_to_utf8(arg, -1, context.temp_allocator) or_else "???"
-				})
-				all_c := strings.join(all_str, ", ", context.temp_allocator)
-				fmt.sbprintf(&debug_str, "\targs: %v", all_c)
+				fmt.sbprint(&debug_str, "\targs: ")
+				for arg_wstring, i in args->GetArguments()[:args->GetCount()] {
+					if i > 0 {
+						fmt.sbprint(&debug_str, ", ")
+					}
+					arg_string := win.wstring_to_utf8(arg_wstring, -1, context.temp_allocator) or_else "???"
+					fmt.sbprint(&debug_str, arg_string)
+				}
+				fmt.sbprintln(&debug_str)
 			}
 			log.debugf("permute %s:\n%s", shader.name, strings.to_string(debug_str))
 		}
@@ -456,7 +462,6 @@ main_ :: proc() -> Error {
 		switch inner in combo.inner {
 		case ^Compile_Work_Params:
 			// If we just did some compilation, save that output.
-			defer work_params_destroy(inner)
 			all_ok &&= inner.ok
 			if inner.ok {
 				// Need to add the actual source file as a dependency, too.
@@ -612,7 +617,7 @@ main_ :: proc() -> Error {
 				fmt.sbprintfln(&b, "%i}", out_offset)
 			}
 			fmt.sbprintln(&b, "\t#no_bounds_check slice := SOURCE_BLOB[inner[idx + 0]:inner[idx + 1]]")
-			fmt.sbprintln(&b, "\treturn { raw_data(slice), len(slice) }")
+			fmt.sbprintln(&b, "\treturn {raw_data(slice), len(slice)}")
 			fmt.sbprintln(&b, "}")
 		}
 

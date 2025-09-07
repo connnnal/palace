@@ -186,9 +186,8 @@ config_load :: proc(filename: string, allocator := context.temp_allocator) -> (C
 	return config, nil
 }
 
-// To allows shaders with one (no?) variants without special consideration,
-// the iterator yields at least once, even on an empty set of lanes.
-// This does not extend the lanes' lifetime.
+// The iterator yields at least once, in all scenarios.
+// Naturally, this allows shaders with one variant (i.e. no lane with >1 tweak).
 Lane_Iterator :: struct {
 	allocator: runtime.Allocator,
 	lanes:     []Lane,

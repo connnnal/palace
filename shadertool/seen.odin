@@ -93,7 +93,7 @@ d2_record :: proc(hash: Hash, deps: []Path, output: []byte) {
 	item.output = slice.clone(output)
 
 	// Clone paths onto the allocator for safe keeping :).
-	// Order undetermined due to potential hashmap usage upstream, so sort.
+	// Sort to get a consistent hash.
 	item.deps = slice.clone(deps)
 	slice.sort(item.deps)
 	for &v in item.deps {
@@ -110,6 +110,11 @@ d2_record :: proc(hash: Hash, deps: []Path, output: []byte) {
 	d2_state.items[hash] = item
 }
 
+d2_mark_relevant :: proc(hash: Hash) {
+	item := &d2_state.items[hash] or_else log.panicf("no previous entry at hash %q", hash)
+	item.generation = d2_state.generation
+}
+
 d2_check :: proc(hash: Hash) -> (output: []byte, exists_and_deps_ok: bool) {
 	item := d2_state.items[hash] or_return
 
@@ -119,11 +124,6 @@ d2_check :: proc(hash: Hash) -> (output: []byte, exists_and_deps_ok: bool) {
 	}
 
 	return item.output, item.deps_hash == xxhash.XXH64_digest(&state)
-}
-
-d2_mark_relevant :: proc(hash: Hash) {
-	item := &d2_state.items[hash] or_else log.panicf("no previous entry at hash %q", hash)
-	item.generation = d2_state.generation
 }
 
 d2_hash_into :: proc(state: ^xxhash.XXH64_state, path: Path) -> bool {

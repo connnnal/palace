@@ -16,6 +16,7 @@ Include_Handler :: struct {
 }
 
 include_handler_make :: proc(utils: ^dxc.IUtils, ctx := context, allocator := context.temp_allocator) -> Include_Handler {
+	utils->AddRef()
 	this := Include_Handler {
 		idxcincludehandler_vtable = &include_handler_vtable,
 		utils                     = utils,
@@ -27,6 +28,7 @@ include_handler_make :: proc(utils: ^dxc.IUtils, ctx := context, allocator := co
 }
 
 include_handler_destroy :: proc(this: Include_Handler) {
+	this.utils->Release()
 	for k in this.referenced {
 		delete(k, this.allocator)
 	}
@@ -92,7 +94,7 @@ include_handler_vtable: dxc.IIncludeHandler_VTable = {
 		ppIncludeSource^ = blob_encoding
 
 		if !seen_before && win.SUCCEEDED(hr) {
-			// Need to key string for permanent reference.
+			// Need to clone filename off the temporary allocator.
 			append(&this.referenced, strings.clone(filename, this.allocator))
 		}
 
